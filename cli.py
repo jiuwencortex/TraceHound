@@ -21,20 +21,26 @@ from loguru import logger
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="jiuwenswarm-analyze-trajectories",
-        description="Analyze thalamus turn-log trajectories and report bottlenecks.",
+        description="Analyze thalamus or jiuwenswarm turn-log trajectories and report bottlenecks.",
     )
     parser.add_argument(
         "--log-dir",
         required=True,
         metavar="PATH",
-        help="Directory containing thalamus turns_YYYY-WNN.jsonl files.",
+        help="Directory containing log files.  For thalamus: a folder with turns_YYYY-WNN.jsonl files.  For jiuwenswarm: the ~/.jiuwenswarm directory (agent/sessions/*/history.jsonl will be discovered automatically).",
     )
     parser.add_argument(
         "--max-weeks",
         type=int,
         default=8,
         metavar="N",
-        help="Number of most-recent weekly log files to load (default: 8).",
+        help="Number of most-recent weekly (thalamus) or session (jiuwenswarm) files to load (default: 8).",
+    )
+    parser.add_argument(
+        "--source-type",
+        choices=["auto", "thalamus", "jiuwenswarm_sessions"],
+        default="auto",
+        help="Log format to expect.  'auto' detects from directory contents (default).",
     )
     parser.add_argument(
         "--format",
@@ -84,10 +90,14 @@ def main() -> None:
         logger.error("trajectories_analyzer: log directory does not exist: {}", log_dir)
         sys.exit(1)
 
-    from loader import TrajectoriesLoader
-    from report import TrajectoriesReport
+    from jiuwenswarm.trajectories_analyzer.loader import TrajectoriesLoader
+    from jiuwenswarm.trajectories_analyzer.report import TrajectoriesReport
 
-    loader = TrajectoriesLoader(log_dir, max_weeks=args.max_weeks)
+    loader = TrajectoriesLoader(
+        log_dir,
+        max_weeks=args.max_weeks,
+        source_type=args.source_type,
+    )
     reporter = TrajectoriesReport(
         loader,
         quality_deficit_threshold=args.threshold_quality,
@@ -107,6 +117,8 @@ def main() -> None:
         out_path.write_text(output_text, encoding="utf-8")
         logger.info("trajectories_analyzer: report written to {}", out_path)
     else:
+        # force utf-8 output on Windows to avoid UnicodeEncodeError
+        sys.stdout.reconfigure(encoding="utf-8") if hasattr(sys.stdout, "reconfigure") else None
         print(output_text)
 
 

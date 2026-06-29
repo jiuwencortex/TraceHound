@@ -2,11 +2,16 @@
 
 """Turn-log loader.
 
-Reads weekly-rotated JSONL files written by the thalamus TurnLogger and
-returns a list of typed TurnRecord objects sorted by timestamp ascending.
+Supports two source formats:
 
-File naming convention: ``turns_YYYY-WNN.jsonl``
-One JSON object per line; blank lines and malformed records are skipped.
+1. **Thalamus weekly logs** (default) — files named ``turns_YYYY-WNN.jsonl`` produced
+   by the thalamus TurnLogger.
+2. **JiuwenSwarm session histories** — ``history.jsonl`` files inside
+   ``agent/sessions/{session_id}/`` directories produced by the
+   jiuwenswarm runtime.
+
+Format is auto-detected from the directory contents.  Pass ``source_type``
+to force a specific parser.
 """
 
 from __future__ import annotations
@@ -141,18 +146,128 @@ def _parse_record(raw: dict, week_tag: str) -> TurnRecord | None:
     )
 
 
+def _detect_source_type(log_dir: Path) -> str:
+    """Auto-detect whether ``log_dir`` contains thalamus or jiuwenswarm logs."""
+    # JiuwenSwarm: agent/sessions/*/history.jsonl  (or sessions/*/history.jsonl)
+    if (log_dir / "agent" / "sessions").is_dir():
+        return "jiuwenswarm_sessions"
+    if (log_dir / "sessions").is_dir():
+        # sanity check: does it contain history.jsonl files?
+        for sub in (log_dir / "sessions").iterdir():
+            if sub.is_dir() and (sub / "history.jsonl").exists():
+                return "jiuwenswarm_sessions"
+    # Default to thalamus if turns_*.jsonl files exist or as fallback
+    return "thalamus"
+
+
+def _week_tag_from_mtime(path: Path) -> str:
+    """Derive an ISO week tag from a file's last-modified time."""
+    mtime = path.stat().st_mtime
+    dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+    iso_cal = dt.isocalendar()
+    return f"{iso_cal.year}-W{iso_cal.week:02d}"
+
+
+def _parse_jiuwenswarm_turn(messages: list[dict], week_tag: str) -> TurnRecord | None:
+    """Convert a group of jiuwenswarm session messages (same request_id) to a TurnRecord.
+
+    Messages are expected to be raw dicts from ``history.jsonl`` with keys:
+    ``id``, ``role``, ``request_id``, ``timestamp``, ``content``, ``event_type``,
+    ``tool_call``, ``tool_name``, ``error``, etc.
+    """
+    if not messages:
+        return None
+
+    # Sort by timestamp ascending
+    messages.sort(key=lambda m: float(m.get("timestamp", 0)))
+
+    turn_id = str(messages[0].get("request_id", ""))
+    if not turn_id:
+        return None
+
+    # Timestamp from the first message (usually the user message)
+    ts_raw = messages[0].get("timestamp", 0)
+    try:
+        timestamp = datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+    except (ValueError, TypeError):
+        timestamp = datetime.fromtimestamp(0, tz=timezone.utc)
+
+    # Heuristic: task_completed = True if no errors and assistant gave non-empty content
+    has_error = any(m.get("event_type") == "chat.error" for m in messages)
+    assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+    has_content = any(
+        bool(m.get("content")) for m in assistant_messages
+        if m.get("event_type") not in ("chat.tool_call", "chat.tool_update", "chat.usage_metadata")
+    )
+    task_completed = not has_error and has_content
+
+    # Tools called from chat.tool_call events
+    tools_called: list[str] = []
+    for m in messages:
+        if m.get("event_type") == "chat.tool_call":
+            tc = m.get("tool_call") or {}
+            name = tc.get("name")
+            if name:
+                tools_called.append(str(name))
+
+    # Deduplicate while preserving order
+    seen = set()
+    tools_called = [t for t in tools_called if not (t in seen or seen.add(t))]
+
+    # Mode from first message (e.g. "team", "agent.plan")
+    mode = str(messages[0].get("mode", ""))
+
+    # conversation_length = number of messages in this turn
+    conversation_length = len(messages)
+
+    return TurnRecord(
+        turn_id=turn_id,
+        timestamp=timestamp,
+        query_embedding=[],
+        skills=[],
+        memory_sections=[],
+        tools=[],
+        explicit_rating=None,
+        follow_up_correction=has_error,
+        task_completed=task_completed,
+        conversation_length=conversation_length,
+        skills_used=[],
+        tools_called=tools_called,
+        llm_judge_score=None,
+        explored=False,
+        exploration_additions={},
+        week_tag=week_tag,
+    )
+
+
 class TrajectoriesLoader:
-    """Load thalamus turn-log JSONL files from a directory.
+    """Load turn logs from thalamus weekly files or jiuwenswarm session histories.
 
     Args:
-        log_dir: Directory containing ``turns_YYYY-WNN.jsonl`` files.
-        max_weeks: Maximum number of most-recent weekly files to load.
+        log_dir: Directory containing log files.
+        max_weeks: Maximum number of most-recent weekly files (thalamus) or
+            session files (jiuwenswarm) to load.
+        source_type: ``"auto"`` (default), ``"thalamus"``, or
+            ``"jiuwenswarm_sessions"``.
     """
 
-    def __init__(self, log_dir: str | Path, max_weeks: int = 8) -> None:
+    def __init__(
+        self,
+        log_dir: str | Path,
+        max_weeks: int = 8,
+        source_type: str = "auto",
+    ) -> None:
         self._log_dir = Path(log_dir)
         self._max_weeks = max_weeks
+        self._source_type = (
+            source_type if source_type != "auto" else _detect_source_type(self._log_dir)
+        )
         self._skipped: int = 0
+
+    @property
+    def source_type(self) -> str:
+        """The detected or configured source type."""
+        return self._source_type
 
     @property
     def skipped_records(self) -> int:
@@ -161,6 +276,24 @@ class TrajectoriesLoader:
 
     def log_files(self) -> list[Path]:
         """Return matching log file paths sorted newest-first, up to max_weeks."""
+        if self._source_type == "jiuwenswarm_sessions":
+            # Look for agent/sessions/*/history.jsonl or sessions/*/history.jsonl
+            sessions_dir = self._log_dir / "agent" / "sessions"
+            if not sessions_dir.is_dir():
+                sessions_dir = self._log_dir / "sessions"
+
+            paths: list[Path] = []
+            if sessions_dir.is_dir():
+                for sub in sessions_dir.iterdir():
+                    hist = sub / "history.jsonl"
+                    if hist.exists():
+                        paths.append(hist)
+
+            # Sort by modification time (newest first)
+            paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return paths[: self._max_weeks]
+
+        # Thalamus default
         paths = sorted(self._log_dir.glob("turns_*.jsonl"), reverse=True)
         return paths[: self._max_weeks]
 
@@ -169,6 +302,16 @@ class TrajectoriesLoader:
         self._skipped = 0
         records: list[TurnRecord] = []
 
+        if self._source_type == "jiuwenswarm_sessions":
+            records = self._load_jiuwenswarm_sessions()
+        else:
+            records = self._load_thalamus()
+
+        records.sort(key=lambda r: r.timestamp)
+        return records
+
+    def _load_thalamus(self) -> list[TurnRecord]:
+        records: list[TurnRecord] = []
         for path in self.log_files():
             week_tag = _week_tag_from_path(path)
             try:
@@ -193,5 +336,42 @@ class TrajectoriesLoader:
                 else:
                     records.append(record)
 
-        records.sort(key=lambda r: r.timestamp)
+        return records
+
+    def _load_jiuwenswarm_sessions(self) -> list[TurnRecord]:
+        records: list[TurnRecord] = []
+        for path in self.log_files():
+            week_tag = _week_tag_from_mtime(path)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                logger.warning("trajectories_analyzer: cannot read {}: {}", path, exc)
+                continue
+
+            # Group messages by request_id
+            messages_by_request: dict[str, list[dict]] = {}
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    self._skipped += 1
+                    continue
+
+                req_id = raw.get("request_id")
+                if not req_id:
+                    self._skipped += 1
+                    continue
+
+                messages_by_request.setdefault(str(req_id), []).append(raw)
+
+            for req_id, messages in messages_by_request.items():
+                record = _parse_jiuwenswarm_turn(messages, week_tag)
+                if record is None:
+                    self._skipped += 1
+                else:
+                    records.append(record)
+
         return records

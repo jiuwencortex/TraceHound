@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from analyzers.budget_waste import (
+from .analyzers.budget_waste import (
     BudgetWasteAnalyzer,
     BudgetWasteResult,
 )
@@ -55,8 +55,8 @@ from .analyzers.signal_disagreement import (
     SignalDisagreementAnalyzer,
     SignalDisagreementResult,
 )
-from loader import TrajectoriesLoader
-from scorer import compute_qualities
+from .loader import TrajectoriesLoader
+from .scorer import compute_qualities
 
 
 @dataclass(frozen=True)

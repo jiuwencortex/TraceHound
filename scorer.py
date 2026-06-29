@@ -14,7 +14,7 @@ Priority:
 
 from __future__ import annotations
 
-from loader import TurnRecord
+from .loader import TurnRecord
 
 
 def compute_quality(turn: TurnRecord) -> float:
