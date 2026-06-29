@@ -1,0 +1,148 @@
+(jiuwenswarm) PS C:\Workspace\openjiuwen\TraceHound> python -m analyzer --log-dir C:\Users\m00645993\.jiuwenswarm --max-weeks 30 -v
+=== Trajectories Analyzer Report ===
+Generated: 2026-06-29T20:25:33Z
+Mode: VERBOSE (showing per-turn evidence and calculations)
+
+
+--- Data Health ---
+  Total turns: 56
+  Date range:  2026-06-23 → 2026-06-25
+  Log files:   25 (history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl, history.jsonl)
+  Explicit rating coverage: 0.0%
+  LLM judge coverage:       0.0%
+  Skipped (malformed):      0
+  Low-data weeks:  none
+
+  >>> Data Health Evidence
+  Per-session file details:
+    heartbeat_19efeaec402_65ebad: 2 messages, 663 B
+    heartbeat_19efe77b8e5_276088: 2 messages, 664 B
+    heartbeat_19efe40864a_e409ca: 2 messages, 663 B
+    heartbeat_19efe098839_b0d4bd: 2 messages, 664 B
+    heartbeat_19efdd26767_195895: 2 messages, 664 B
+    heartbeat_19efd9b558e_5a53a4: 1 messages, 366 B
+    heartbeat_19efd64523a_84979f: 1 messages, 364 B
+    heartbeat_19efd2d4d88_8f607e: 1 messages, 366 B
+    heartbeat_19efa8eb6cb_bb1ef8: 1 messages, 366 B
+    heartbeat_19ef9a2b5b7_344e75: 1 messages, 366 B
+    sess_19ef921fd49_ef6803: 176 messages, 241.2 KB
+    heartbeat_19ef9604a64_1c694d: 2 messages, 663 B
+    heartbeat_19ef9292765_0d25f0: 2 messages, 663 B
+    heartbeat_19ef8f21a02_69bef4: 2 messages, 663 B
+    heartbeat_19ef8ba5db3_6e4807: 2 messages, 664 B
+    sess_19ef8846242_32b9e7: 17 messages, 9.1 KB
+    sess_19ef446eb3c_481d67: 31 messages, 12.7 KB
+    heartbeat_19ef4720ffe_6eb0a6: 1 messages, 365 B
+    sess_19ef445a42c_42ae19: 2 messages, 837 B
+    sess_19ef44130cd_87e78d: 2 messages, 478 B
+    sess_19ef43f8e84_be826e: 2 messages, 478 B
+    sess_19ef42af2b6_561773: 24 messages, 6.7 KB
+    sess_19ef432934c_d783eb: 2 messages, 482 B
+    sess_19ef41c274f_f0719a: 14 messages, 4.5 KB
+    sess_19ef3f22ce5_91aa84: 2 messages, 803 B
+
+--- Quality Trend: ? INSUFFICIENT DATA ---
+  Overall mean quality: 0.558
+  Best week:  2026-W26 (mean=0.558, n=56)
+  Worst week: 2026-W26 (mean=0.558, n=56)
+  Per-week breakdown (1 weeks):
+    2026-W26: mean=0.558  n=56  +0/-0 explicit  completed=22  corrections=13
+
+  >>> Quality Evidence
+  Top 5 highest-quality turns:
+    heartbeat-19ef8ba5db3_6e4807  q=0.760  [OK]  len=2
+    heartbeat-19ef8f21a02_69bef4  q=0.760  [OK]  len=2
+    heartbeat-19ef9292765_0d25f0  q=0.760  [OK]  len=2
+    heartbeat-19ef9604a64_1c694d  q=0.760  [OK]  len=2
+    heartbeat-19efdd26767_195895  q=0.760  [OK]  len=2
+  Bottom 5 lowest-quality turns:
+    req_mqqqkgjc_20               q=0.260  [ERR]  len=2
+    req_mqqqs4zr_38               q=0.260  [ERR]  len=2
+    req_mqqremgt_10               q=0.260  [ERR]  len=2
+    req_mqqjboyn_11               q=0.200  [ERR]  len=8
+    req_mqqjl5la_60               q=0.200  [ERR]  len=9
+  Quality formula: 0.5 + 0.20*task_completed - 0.30*correction + max(0, 0.10 - 0.02*length)
+  (LLM judge score or explicit rating overrides the formula when available)
+
+--- Component Bottlenecks (0 flagged) ---
+  Global mean quality: 0.558
+  No bottleneck components detected.
+
+--- Budget Waste (0 items) ---
+  No budget waste detected.
+
+--- Correction Patterns (top 0) ---
+  Baseline correction rate: 23.2%  (13/56 turns)
+  No high-lift correction patterns detected.
+
+  >>> Correction Evidence
+  All 13 error turns (sorted by quality):
+    req_mqqjboyn_11                   q=0.200  len=8
+    req_mqqjl5la_60                   q=0.200  len=9
+    req_mqqhca6v_9                    q=0.260  len=2
+    req_mqqj7azu_9                    q=0.260  len=2
+    req_mqqklpwa_124                  q=0.260  len=2
+    req_mqqknapz_136                  q=0.260  len=2
+    req_mqqkr4uf_156                  q=0.260  len=2
+    req_mqql0mwe_200                  q=0.260  len=2
+    req_mqql4cna_16                   q=0.260  len=2
+    req_mqqqjmlb_12                   q=0.260  len=2
+    req_mqqqkgjc_20                   q=0.260  len=2
+    req_mqqqs4zr_38                   q=0.260  len=2
+    req_mqqremgt_10                   q=0.260  len=2
+
+--- Exploration Analysis ---
+  Explored turns: 0 / 56
+  No exploration turns found in loaded data.
+
+--- Conversation Length ---
+  Length distribution: min=1  median=2.0  p90=10.0  max=80
+  Long turns (≥4):  13 successful  / 2 failed
+  Quality by length bucket:
+    short      (len 1–1):  n=10  quality=0.580  completion=0.0%
+    medium     (len 2–3):  n=31  quality=0.510  completion=29.0%
+    long       (len 4–5):  n=6  quality=0.720  completion=100.0%
+    very_long  (len 6–∞):  n=9  quality=0.589  completion=77.8%
+  No components consistently inflate conversation length.
+
+  >>> Conversation Length Evidence
+  Longest turns (top 10):
+    req_mqrx5g0l_264                  len= 80  q=0.700
+    req_mqrziuvq_528                  len= 31  q=0.700
+    req_mqrz495d_468                  len= 21  q=0.700
+    req_mqrzf8y4_505                  len= 15  q=0.700
+    req_mqrzgeb1_513                  len= 14  q=0.700
+    req_mqryyr1r_443                  len= 11  q=0.700
+    req_mqqjl5la_60                   len=  9  q=0.200
+    req_mqrr8twd_66                   len=  9  q=0.700
+    req_mqqjboyn_11                   len=  8  q=0.200
+    req_mqqrfjs6_22                   len=  4  q=0.720
+  ...
+  Shortest turns (bottom 5):
+    heartbeat-19ef9a2b5b7_344e75      len=  1  q=0.580
+    heartbeat-19efa8eb6cb_bb1ef8      len=  1  q=0.580
+    heartbeat-19efd2d4d88_8f607e      len=  1  q=0.580
+    heartbeat-19efd64523a_84979f      len=  1  q=0.580
+    heartbeat-19efd9b558e_5a53a4      len=  1  q=0.580
+
+--- Signal Disagreement (formula vs explicit rating) ---
+  No explicitly rated turns to compare.
+
+--- Component Interactions (0 pairs evaluated) ---
+  Not enough co-occurrence data to evaluate pairs.
+
+  >>> Tool Usage
+  Tool call frequency:
+    list_files                        4 calls
+    read_file                         3 calls
+    glob                              2 calls
+    search_skill                      2 calls
+    todo_create                       1 call
+    bash                              1 call
+    code                              1 call
+    todo_modify                       1 call
+    send_file_to_user                 1 call
+    memory_search                     1 call
+    install_skill                     1 call
+    skill_tool                        1 call
+(jiuwenswarm) PS C:\Workspace\openjiuwen\TraceHound>
