@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
+from ..loader import TurnRecord
 
 _MIN_EXPLORATION_TURNS = 3   # need at least this many to produce per-component stats
 

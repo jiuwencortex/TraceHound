@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
+from ..loader import TurnRecord
 
 _LOW_DATA_THRESHOLD = 10  # turns per week below which a week is flagged
 

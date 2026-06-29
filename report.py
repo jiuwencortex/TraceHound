@@ -23,35 +23,35 @@ from analyzers.budget_waste import (
     BudgetWasteAnalyzer,
     BudgetWasteResult,
 )
-from analyzers import (
+from .analyzers.component_interactions import (
     ComponentInteractionsAnalyzer,
     ComponentInteractionsResult,
 )
-from analyzers import (
+from .analyzers.component_performance import (
     ComponentPerformanceAnalyzer,
     ComponentPerformanceResult,
 )
-from analyzers import (
+from .analyzers.conversation_length import (
     ConversationLengthAnalyzer,
     ConversationLengthResult,
 )
-from analyzers.correction_patterns import (
+from .analyzers.correction_patterns import (
     CorrectionPatternsAnalyzer,
     CorrectionPatternsResult,
 )
-from analyzers import (
+from .analyzers.data_health import (
     DataHealthAnalyzer,
     DataHealthResult,
 )
-from analyzers.exploration_analysis import (
+from .analyzers.exploration_analysis import (
     ExplorationAnalyzer,
     ExplorationAnalysisResult,
 )
-from analyzers import (
+from .analyzers.quality_trends import (
     QualityTrendsAnalyzer,
     QualityTrendsResult,
 )
-from analyzers import (
+from .analyzers.signal_disagreement import (
     SignalDisagreementAnalyzer,
     SignalDisagreementResult,
 )

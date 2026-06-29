@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
+from ..loader import TurnRecord
 
 _DEFAULT_LIFT_THRESHOLD = 1.5
 _MIN_TURNS_FOR_FLAG = 5

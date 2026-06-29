@@ -25,8 +25,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
-from jiuwenswarm.trajectories_analyzer.scorer import compute_quality
+from ..loader import TurnRecord
+from ..scorer import compute_quality
 
 _DEFAULT_DISAGREEMENT_THRESHOLD = 0.35   # | formula_score - expected | > threshold → disagree
 _MIN_COMPONENT_TURNS = 3                 # min turns for per-component disagreement rate

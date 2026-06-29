@@ -20,7 +20,7 @@ from __future__ import annotations
 import statistics
 from dataclasses import dataclass
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
+from ..loader import TurnRecord
 
 _LENGTH_BUCKETS: list[tuple[str, int, int]] = [
     ("short", 1, 1),

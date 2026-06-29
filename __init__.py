@@ -33,16 +33,16 @@ CLI entry point::
     jiuwenswarm-analyze-trajectories --log-dir /path/to/online_logs
 """
 
-from analyzers import (
+from .analyzers.component_interactions import (
     ComponentInteractionsAnalyzer,
     ComponentInteractionsResult,
     ComponentPair,
 )
-from analyzers import (
+from .analyzers.conversation_length import (
     ConversationLengthAnalyzer,
     ConversationLengthResult,
 )
-from analyzers import (
+from .analyzers.signal_disagreement import (
     SignalDisagreementAnalyzer,
     SignalDisagreementResult,
 )

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
+from ..loader import TurnRecord
 
 _TREND_SLOPE_THRESHOLD = 0.02   # absolute slope per week; above/below = improving/degrading
 _MIN_WEEKS_FOR_TREND = 3        # need at least this many data points for trend detection

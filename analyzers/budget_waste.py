@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
+from ..loader import TurnRecord
 
 _DEFAULT_UTILIZATION_THRESHOLD = 0.20  # below this → "rarely used"
 _MIN_TURNS_FOR_WASTE_FLAG = 5           # don't flag components seen in fewer turns

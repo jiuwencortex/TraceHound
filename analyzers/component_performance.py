@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
+from ..loader import TurnRecord
 
 _DEFAULT_QUALITY_DEFICIT = 0.15   # component mean quality > global_mean - threshold → flagged
 _DEFAULT_CORRECTION_RATE = 0.30   # correction rate above this → flagged

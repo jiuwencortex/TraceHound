@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jiuwenswarm.trajectories_analyzer.loader import TurnRecord
+from ..loader import TurnRecord
 
 _DEFAULT_TOXIC_THRESHOLD = 0.10
 _DEFAULT_SYNERGY_THRESHOLD = 0.10
