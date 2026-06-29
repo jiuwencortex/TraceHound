@@ -39,11 +39,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=8,
         metavar="N",
-        help="Number of most-recent weekly (thalamus) or session (jiuwenswarm) files to load (default: 8).",
+        help="Number of session (jiuwenswarm) files to load (default: 8).",
     )
     parser.add_argument(
         "--source-type",
-        choices=["auto", "thalamus", "jiuwenswarm_sessions"],
+        choices=["auto", "jiuwenswarm_sessions"],
         default="auto",
         help="Log format to expect.  'auto' detects from directory contents (default).",
     )

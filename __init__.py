@@ -1,6 +1,6 @@
 """Trajectories Analyzer for JiuwenSwarm.
 
-Reads thalamus weekly turn-log JSONL files and surfaces actionable diagnostics.
+Reads jiuwenswarm session-history JSONL files and surfaces actionable diagnostics.
 
 Quick start::
 

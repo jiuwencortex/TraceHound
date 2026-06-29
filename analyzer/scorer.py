@@ -2,14 +2,15 @@
 
 """Outcome quality scorer.
 
-Mirrors the quality formula from ``thalamus/shared/outcome_scorer.py`` so the
-analyzer can compute quality scores without importing thalamus directly.
+Computes quality scores from implicit signals (task_completed,
+follow_up_correction, conversation_length), explicit ratings, and LLM judge
+scores when available.
 
 Priority:
   1. explicit_rating  → "positive" = 1.0, "negative" = 0.0
   2. llm_judge_score  → use directly (already in [0, 1])
   3. implicit signals → formula based on task_completed, follow_up_correction,
-                        and conversation_length
+                         and conversation_length
 """
 
 from __future__ import annotations

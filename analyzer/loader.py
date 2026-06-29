@@ -2,22 +2,15 @@
 
 """Turn-log loader.
 
-Supports two source formats:
-
-1. **Thalamus weekly logs** (default) — files named ``turns_YYYY-WNN.jsonl`` produced
-   by the thalamus TurnLogger.
-2. **JiuwenSwarm session histories** — ``history.jsonl`` files inside
-   ``agent/sessions/{session_id}/`` directories produced by the
-   jiuwenswarm runtime.
-
-Format is auto-detected from the directory contents.  Pass ``source_type``
-to force a specific parser.
+Reads jiuwenswarm session-history JSONL files from
+``agent/sessions/{session_id}/history.jsonl`` and returns typed TurnRecord
+objects sorted by timestamp ascending.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,7 +48,6 @@ class TurnRecord:
 
     # Wall-clock duration of the turn in seconds.
     # Populated from jiuwenswarm message timestamps (last_msg.ts - first_msg.ts).
-    # 0.0 for thalamus turns where per-message timing is unavailable.
     duration_seconds: float = 0.0
 
     def to_dict(self) -> dict:
@@ -89,89 +81,6 @@ class ToolCallTiming:
     call_timestamp: float    # Unix epoch of the chat.tool_call message
     result_timestamp: float  # Unix epoch of the matching result message; 0 if unknown
     duration_seconds: float  # result_timestamp - call_timestamp; 0 if unmatched
-
-
-def _parse_timestamp(raw: str) -> datetime:
-    """Parse ISO 8601 UTC timestamp into a timezone-aware datetime."""
-    try:
-        if raw.endswith("Z"):
-            raw = raw[:-1] + "+00:00"
-        return datetime.fromisoformat(raw)
-    except (ValueError, AttributeError):
-        return datetime.fromtimestamp(0, tz=timezone.utc)
-
-
-def _week_tag_from_path(path: Path) -> str:
-    """Extract week tag from filename, e.g. turns_2025-W03.jsonl → '2025-W03'."""
-    stem = path.stem  # turns_2025-W03
-    parts = stem.split("_", 1)
-    return parts[1] if len(parts) == 2 else stem
-
-
-def _parse_record(raw: dict, week_tag: str) -> TurnRecord | None:
-    """Convert a raw dict to a TurnRecord.  Returns None if required fields are absent."""
-    turn_id = raw.get("turn_id")
-    if not turn_id:
-        return None
-
-    timestamp_raw = raw.get("timestamp", "1970-01-01T00:00:00Z")
-    timestamp = _parse_timestamp(str(timestamp_raw))
-
-    embedding = raw.get("query_embedding") or []
-
-    ctx = raw.get("context_config") or {}
-    skills: list[str] = list(ctx.get("skills") or [])
-    memory_sections: list[str] = list(ctx.get("memory_sections") or [])
-    tools: list[str] = list(ctx.get("tools") or [])
-
-    outcome = raw.get("outcome") or {}
-    explicit_rating = outcome.get("explicit_rating")
-    implicit = outcome.get("implicit_signals") or {}
-    follow_up_correction: bool = bool(implicit.get("follow_up_correction", False))
-    task_completed: bool = bool(implicit.get("task_completed", False))
-    conversation_length: int = int(implicit.get("conversation_length") or 0)
-
-    usage = outcome.get("component_usage") or {}
-    skills_used: list[str] = list(usage.get("skills_used") or [])
-    tools_called: list[str] = list(usage.get("tools_called") or [])
-
-    llm_judge_raw = outcome.get("llm_judge_score")
-    llm_judge_score: float | None = float(llm_judge_raw) if llm_judge_raw is not None else None
-
-    exploration_block = raw.get("exploration") or {}
-    explored: bool = bool(exploration_block.get("explored", False))
-    exploration_additions: dict = dict(exploration_block.get("explored_additions") or {})
-
-    return TurnRecord(
-        turn_id=str(turn_id),
-        timestamp=timestamp,
-        query_embedding=list(embedding),
-        skills=skills,
-        memory_sections=memory_sections,
-        tools=tools,
-        explicit_rating=explicit_rating if explicit_rating in ("positive", "negative") else None,
-        follow_up_correction=follow_up_correction,
-        task_completed=task_completed,
-        conversation_length=conversation_length,
-        skills_used=skills_used,
-        tools_called=tools_called,
-        llm_judge_score=llm_judge_score,
-        explored=explored,
-        exploration_additions=exploration_additions,
-        week_tag=week_tag,
-        duration_seconds=0.0,
-    )
-
-
-def _detect_source_type(log_dir: Path) -> str:
-    """Auto-detect whether ``log_dir`` contains thalamus or jiuwenswarm logs."""
-    if (log_dir / "agent" / "sessions").is_dir():
-        return "jiuwenswarm_sessions"
-    if (log_dir / "sessions").is_dir():
-        for sub in (log_dir / "sessions").iterdir():
-            if sub.is_dir() and (sub / "history.jsonl").exists():
-                return "jiuwenswarm_sessions"
-    return "thalamus"
 
 
 def _week_tag_from_mtime(path: Path) -> str:
@@ -322,26 +231,18 @@ def _parse_jiuwenswarm_turn(
 
 
 class TrajectoriesLoader:
-    """Load turn logs from thalamus weekly files or jiuwenswarm session histories."""
+    """Load jiuwenswarm session-history JSONL files."""
 
     def __init__(
         self,
         log_dir: str | Path,
         max_weeks: int = 8,
-        source_type: str = "auto",
     ) -> None:
         self._log_dir = Path(log_dir)
         self._max_weeks = max_weeks
-        self._source_type = (
-            source_type if source_type != "auto" else _detect_source_type(self._log_dir)
-        )
         self._skipped: int = 0
         self._raw_sessions: dict[Path, list[dict]] = {}
         self._tool_call_timings: list[ToolCallTiming] = []
-
-    @property
-    def source_type(self) -> str:
-        return self._source_type
 
     @property
     def skipped_records(self) -> int:
@@ -353,27 +254,23 @@ class TrajectoriesLoader:
 
     @property
     def tool_call_timings(self) -> list[ToolCallTiming]:
-        """Per-tool-call timing records (jiuwenswarm only; empty for thalamus)."""
+        """Per-tool-call timing records extracted from session messages."""
         return self._tool_call_timings
 
     def log_files(self) -> list[Path]:
         """Return matching log file paths sorted newest-first, up to max_weeks."""
-        if self._source_type == "jiuwenswarm_sessions":
-            sessions_dir = self._log_dir / "agent" / "sessions"
-            if not sessions_dir.is_dir():
-                sessions_dir = self._log_dir / "sessions"
+        sessions_dir = self._log_dir / "agent" / "sessions"
+        if not sessions_dir.is_dir():
+            sessions_dir = self._log_dir / "sessions"
 
-            paths: list[Path] = []
-            if sessions_dir.is_dir():
-                for sub in sessions_dir.iterdir():
-                    hist = sub / "history.jsonl"
-                    if hist.exists():
-                        paths.append(hist)
+        paths: list[Path] = []
+        if sessions_dir.is_dir():
+            for sub in sessions_dir.iterdir():
+                hist = sub / "history.jsonl"
+                if hist.exists():
+                    paths.append(hist)
 
-            paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            return paths[: self._max_weeks]
-
-        paths = sorted(self._log_dir.glob("turns_*.jsonl"), reverse=True)
+        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return paths[: self._max_weeks]
 
     def load(self) -> list[TurnRecord]:
@@ -383,45 +280,6 @@ class TrajectoriesLoader:
         self._tool_call_timings = []
         records: list[TurnRecord] = []
 
-        if self._source_type == "jiuwenswarm_sessions":
-            records = self._load_jiuwenswarm_sessions()
-        else:
-            records = self._load_thalamus()
-
-        records.sort(key=lambda r: r.timestamp)
-        return records
-
-    def _load_thalamus(self) -> list[TurnRecord]:
-        records: list[TurnRecord] = []
-        for path in self.log_files():
-            week_tag = _week_tag_from_path(path)
-            try:
-                text = path.read_text(encoding="utf-8")
-            except OSError as exc:
-                logger.warning("trajectories_analyzer: cannot read {}: {}", path, exc)
-                continue
-
-            for line in text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError:
-                    self._skipped += 1
-                    continue
-
-                record = _parse_record(raw, week_tag)
-                if record is None:
-                    self._skipped += 1
-                else:
-                    records.append(record)
-                self._raw_sessions.setdefault(path, []).append(raw)
-
-        return records
-
-    def _load_jiuwenswarm_sessions(self) -> list[TurnRecord]:
-        records: list[TurnRecord] = []
         for path in self.log_files():
             week_tag = _week_tag_from_mtime(path)
             try:
@@ -464,4 +322,5 @@ class TrajectoriesLoader:
                 if isinstance(raw, dict)
             ]
 
+        records.sort(key=lambda r: r.timestamp)
         return records

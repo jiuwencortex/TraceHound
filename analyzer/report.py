@@ -422,11 +422,10 @@ class TrajectoriesReport:
                 )
         elif not cp.flagged_components:
             lines.append("  No bottleneck components detected.")
-            if self._loader.source_type == "jiuwenswarm_sessions":
-                lines.append(
-                    "  (jiuwenswarm session logs do not carry skills/memory/tools context;"
-                    " only tool_calls are available for analysis)"
-                )
+            lines.append(
+                "  (jiuwenswarm session logs do not carry skills/memory/tools context;"
+                " only tool_calls are available for analysis)"
+            )
 
         if cp.flagged_components and len(cp.flagged_components) > len(cp.top_priority_fixes):
             lines.append(
@@ -484,11 +483,10 @@ class TrajectoriesReport:
             )
         if total_waste == 0:
             lines.append("  No budget waste detected.")
-            if self._loader.source_type == "jiuwenswarm_sessions":
-                lines.append(
-                    "  (jiuwenswarm session logs do not carry context configuration;"
-                    " budget analysis requires thalamus turn logs)"
-                )
+            lines.append(
+                "  (jiuwenswarm session logs do not carry context configuration;"
+                " budget analysis is not available for this format)"
+            )
 
         # ------------------------------------------------------------------
         # Correction patterns

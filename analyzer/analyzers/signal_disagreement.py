@@ -2,7 +2,7 @@
 
 """Signal disagreement analyzer.
 
-The thalamus quality formula blends explicit ratings, LLM judge scores, and
+The quality formula blends explicit ratings, LLM judge scores, and
 implicit signals (task_completed, follow_up_correction, conversation_length).
 When explicit ratings are present they act as ground truth, but they may
 disagree with what the implicit signals suggest.

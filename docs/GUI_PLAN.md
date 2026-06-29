@@ -25,17 +25,17 @@
 
 ## 1. Motivation and Constraints
 
-TraceHound currently exposes a single CLI entry point (`python -m analyzer --log-dir ...`). All ten
+TraceHound currently exposes a single CLI entry point (`python -m analyzer --log-dir ...`). All
 analyzers produce rich structured data via `ReportResult`, but that data is rendered as plain UTF-8
-text to stdout. For a typical 30-week jiuwenswarm dataset with hundreds of turns, the text output
+text to stdout. For a typical jiuwenswarm dataset with dozens of sessions and hundreds of turns, the text output
 can be 500+ lines — difficult to scan and impossible to compare interactively.
 
 A desktop GUI would allow:
 
-- Immediate visual triage (which week degraded? which tool is the bottleneck?)
+- Immediate visual triage (which session degraded? which tool is the bottleneck?)
 - Drill-down from aggregate metrics to individual turns
-- Interactive threshold adjustment (`quality_deficit_threshold`, `utilization_threshold`,
-  `correction_lift_threshold`) with live re-analysis
+- Interactive threshold adjustment (`quality_deficit_threshold`, `correction_lift_threshold`)
+  with live re-analysis
 - Side-by-side comparison of analyzers without reading monolithic text
 - A session browser for exploring raw turn content without editing CLI flags
 
@@ -171,13 +171,8 @@ TraceHound/
 │       ├── data_health.py
 │       ├── quality_trends.py
 │       ├── time_bottlenecks.py
-│       ├── component_performance.py
-│       ├── budget_waste.py
 │       ├── correction_patterns.py
-│       ├── conversation_length.py
-│       ├── signal_disagreement.py
-│       ├── component_interactions.py
-│       └── exploration_analysis.py
+│       └── conversation_length.py
 │
 └── analyzer_gui/                (NEW package)
     ├── __init__.py              (empty)
@@ -189,12 +184,9 @@ TraceHound/
     │   ├── __init__.py
     │   ├── load_view.py         (LoadView — log directory chooser + run button)
     │   ├── overview_view.py     (OverviewView — summary stat cards + quality badge)
-    │   ├── quality_view.py      (QualityView — matplotlib line chart + week table)
+    │   ├── quality_view.py      (QualityView — matplotlib line chart + session table)
     │   ├── timing_view.py       (TimingView — duration histogram + slowest-turns table)
-    │   ├── components_view.py   (ComponentsView — tabbed: performance / waste / corrections)
-    │   ├── interactions_view.py (InteractionsView — toxic/synergistic pairs tables)
-    │   ├── sessions_view.py     (SessionsView — session list + turn browser)
-    │   └── settings_view.py     (SettingsView — threshold sliders + re-run + export)
+    │   └── sessions_view.py     (SessionsView — session list + turn browser)
     └── widgets/
         ├── __init__.py
         ├── stat_card.py         (StatCard — reusable labelled metric card widget)
@@ -235,10 +227,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--log-dir", default=None, metavar="PATH",
         help="Pre-populate the log directory field on launch.")
-    parser.add_argument("--max-weeks", type=int, default=30,
-        help="Maximum sessions/weeks to load (default: 30).")
-    parser.add_argument("--source-type",
-        choices=["auto", "thalamus", "jiuwenswarm_sessions"], default="auto")
+    parser.add_argument("--max-sessions", type=int, default=30,
+        help="Maximum sessions to load (default: 30).")
     return parser
 
 def main() -> None:
@@ -246,8 +236,7 @@ def main() -> None:
     from analyzer_gui.app import TraceHoundApp
     app = TraceHoundApp(
         initial_log_dir=Path(args.log_dir) if args.log_dir else None,
-        initial_max_weeks=args.max_weeks,
-        initial_source_type=args.source_type,
+        initial_max_sessions=args.max_sessions,
     )
     app.mainloop()
 ```
@@ -259,13 +248,13 @@ Class `TraceHoundApp(customtkinter.CTk)`. Responsibilities:
 - Creates the root window (title "TraceHound", minimum size 1100×700).
 - Sets `customtkinter.set_appearance_mode("System")` to follow the OS light/dark theme.
 - Builds a left-side `CTkFrame` navigation rail with `CTkButton` items: Load, Overview, Quality,
-  Timing, Components, Interactions, Sessions, Settings.
+  Timing, Sessions.
 - Holds a right-side content area where each `View` is instantiated and shown/hidden via
   `grid_remove()` / `grid()`.
 - Stores the `AnalysisBackend` instance and the current `ReportResult` (initially `None`).
 - Exposes `on_result_ready(result: ReportResult, loader: TrajectoriesLoader)` called from the
   backend thread via `root.after(0, callback)` to trigger all views to refresh.
-- Exposes `start_analysis(config: AnalysisConfig)` called by `LoadView` and `SettingsView`.
+- Exposes `start_analysis(config: AnalysisConfig)` called by `LoadView`.
 
 ### 5.4 `analyzer_gui/backend.py`
 
@@ -286,10 +275,8 @@ class AnalysisBackend:
     def run_async(
         self,
         log_dir: Path,
-        max_weeks: int,
-        source_type: str,
+        max_sessions: int,
         quality_deficit_threshold: float,
-        utilization_threshold: float,
         correction_lift_threshold: float,
         on_progress: Callable[[str], None],
         on_complete: Callable[[ReportResult, TrajectoriesLoader], None],
@@ -299,27 +286,26 @@ class AnalysisBackend:
             return  # analysis already running; ignore
         self._thread = threading.Thread(
             target=self._worker,
-            args=(log_dir, max_weeks, source_type,
-                  quality_deficit_threshold, utilization_threshold,
+            args=(log_dir, max_sessions,
+                  quality_deficit_threshold,
                   correction_lift_threshold,
                   on_progress, on_complete, on_error),
             daemon=True,
         )
         self._thread.start()
 
-    def _worker(self, log_dir, max_weeks, source_type,
-                qd_thresh, util_thresh, lift_thresh,
+    def _worker(self, log_dir, max_sessions,
+                qd_thresh, lift_thresh,
                 on_progress, on_complete, on_error):
         try:
             on_progress("Loading log files...")
             loader = TrajectoriesLoader(
-                log_dir, max_weeks=max_weeks, source_type=source_type
+                log_dir, max_weeks=max_sessions, source_type="auto"
             )
             on_progress("Running analyzers...")
             reporter = TrajectoriesReport(
                 loader,
                 quality_deficit_threshold=qd_thresh,
-                utilization_threshold=util_thresh,
                 correction_lift_threshold=lift_thresh,
             )
             result = reporter.run()
@@ -342,9 +328,8 @@ The first screen shown on launch.
 **Widgets:**
 - `CTkLabel` — "TraceHound" title
 - `CTkEntry` `self.dir_entry` — typed log directory path
-- `CTkButton` "Browse…" — opens `tkinter.filedialog.askdirectory()`
-- `CTkComboBox` `self.source_combo` — ["auto", "thalamus", "jiuwenswarm_sessions"]
-- `CTkEntry` `self.weeks_entry` — integer, default 30
+- `CTkButton` "Browse..." — opens `tkinter.filedialog.askdirectory()`
+- `CTkEntry` `self.sessions_entry` — integer, default 30
 - `CTkButton` "Run Analysis" — calls `app.start_analysis()`
 - `CTkProgressBar` `self.progress_bar` — indeterminate pulse during analysis
 - `CTkLabel` `self.status_label` — "Ready.", "Loading...", "Done.", "Error: ..."
@@ -365,37 +350,28 @@ One-glance summary using `StatCard` widgets in a `CTkScrollableFrame`.
 | Overall Mean Quality        | `result.quality_trends.overall_mean` (colour-coded)         |
 | Trend Direction             | `result.quality_trends.trend_direction` with arrow symbol   |
 | Baseline Correction Rate    | `result.correction_patterns.baseline_correction_rate`       |
-| Explicit Rating Coverage    | `result.data_health.explicit_rating_coverage`               |
-| LLM Judge Coverage          | `result.data_health.llm_judge_coverage`                     |
 | Sessions / Log Files        | `len(loader.raw_sessions)` or `len(dh.log_files_found)`     |
 | Median Turn Duration        | `result.time_bottlenecks.median_duration_s` (if > 0)        |
-| Flagged Components          | `len(result.component_performance.flagged_components)`      |
-| Budget Waste Items          | sum of never/rarely-used skills + tools                     |
-| Toxic Pairs                 | `len(result.component_interactions.toxic_pairs)`            |
-| Disagreement Rate           | `result.signal_disagreement.disagreement_rate`              |
 
 Colour coding for Overall Mean Quality: green frame (> 0.70), yellow (0.50–0.70), red (< 0.50).
 
 Below the cards: a `CTkTextbox` (read-only, height=15) showing the first 80 lines of
 `report.render_text(result)` for quick text-mode reference.
 
-A collapsible section "Signal Disagreement" shows `result.signal_disagreement.worst_disagreements`
-in a compact `SortableTable` (columns: Turn ID, Explicit Rating, Formula Score, Delta, Type).
-
 ### 6.3 QualityView (`views/quality_view.py`)
 
 **Upper half — `MplFrame` line chart:**
-- X axis: week tags from `result.quality_trends.weeks` (chronological).
-- Y axis: `mean_quality` per week, range [0, 1].
+- X axis: session indices from `result.quality_trends.weeks` (chronological).
+- Y axis: `mean_quality` per session, range [0, 1].
 - Line colour: green (`improving`), red (`degrading`), grey otherwise.
 - Filled area under line at 30% alpha.
-- Secondary bar chart (twin axis, `ax.twinx()`) showing `n_turns` per week as light blue bars.
+- Secondary bar chart (twin axis, `ax.twinx()`) showing `n_turns` per session as light blue bars.
 - Horizontal dashed reference line at `overall_mean`.
-- Annotations on best-week and worst-week data points.
+- Annotations on best and worst session data points.
 
 **Lower half — `SortableTable`:**
 
-Columns: `Week`, `Turns`, `Mean Quality`, `Completed`, `Corrections`, `+Explicit`, `-Explicit`
+Columns: `Session`, `Turns`, `Mean Quality`, `Completed`, `Corrections`
 
 Data source: `result.quality_trends.weeks` (list of `WeeklyQualitySummary`).
 
@@ -434,60 +410,7 @@ Only shown if `len(result.time_bottlenecks.tool_call_timing) > 0`.
 X axis: hour 0–23 UTC. Y axis: `n_turns`. Bars colour-coded by `mean_quality` (green/yellow/red).
 Data: `result.time_bottlenecks.hourly_distribution`.
 
-### 6.5 ComponentsView (`views/components_view.py`)
-
-`CTkTabview` with three tabs.
-
-**Tab "Performance"**
-
-Top: three `StatCard` widgets showing `type_breakdown` for skill / memory / tool types:
-`budget_fraction`, `mean_quality`, `n_flagged`.
-
-Main `SortableTable` — all components from `result.component_performance.components`.
-Columns: `Name`, `Type`, `Turns`, `Mean Quality`, `Completion %`, `Correction %`, `Flags`, `Severity`
-Default sort: severity descending.
-Flagged rows shown with red background.
-
-**Tab "Budget Waste"**
-
-Four sub-sections in a `CTkScrollableFrame`:
-1. Never-used skills — bullet list from `result.budget_waste.never_used_skills`
-2. Never-used tools — bullet list from `result.budget_waste.never_used_tools`
-3. Rarely-used skills — `SortableTable` from `result.budget_waste.rarely_used_skills`
-   (columns: `Name`, `Included`, `Used`, `Utilization %`)
-4. Rarely-used tools — same structure for `result.budget_waste.rarely_used_tools`
-
-Note label (shown only for jiuwenswarm sessions):
-"Budget waste analysis requires thalamus format logs. jiuwenswarm session logs do not carry context
-configuration."
-
-**Tab "Correction Patterns"**
-
-Header `StatCard` widgets: baseline correction rate, total corrected turns, total turns.
-
-`SortableTable` from `result.correction_patterns.high_lift_components`.
-Columns: `Component`, `Type`, `Correction Rate`, `Baseline Rate`, `Lift`, `Turns`, `Corrected`
-Rows with `lift >= 2.0` highlighted red; `lift >= 1.5` highlighted yellow.
-
-### 6.6 InteractionsView (`views/interactions_view.py`)
-
-Header label: `N pairs evaluated: {result.component_interactions.n_pairs_evaluated}`.
-
-`CTkTabview` with two tabs.
-
-**Tab "Toxic Pairs"**
-`SortableTable` from `result.component_interactions.toxic_pairs`.
-Columns: `Component A`, `Type A`, `Component B`, `Type B`, `Co-occurrences`,
-`Expected Quality`, `Actual Quality`, `Delta`
-Delta column colour-coded red.
-
-**Tab "Synergistic Pairs"**
-Same columns. Delta colour-coded green.
-
-No-data label when `n_pairs_evaluated == 0`:
-"Not enough co-occurrence data. At least 5 co-occurrences per pair required."
-
-### 6.7 SessionsView (`views/sessions_view.py`)
+### 6.5 SessionsView (`views/sessions_view.py`)
 
 Uses `loader.raw_sessions` (the `dict[Path, list[dict]]` on `TrajectoriesLoader`) directly.
 
@@ -512,12 +435,12 @@ Below: `CTkScrollableFrame` where each turn is a collapsible `CTkFrame`:
 Turn groups are built by grouping `raw_sessions[path]` by `request_id`, mirroring
 `report.py`'s `render_verbose()` logic.
 
-**Lazy loading:** only the first 50 turns are rendered immediately. A "Load more…" `CTkButton`
+**Lazy loading:** only the first 50 turns are rendered immediately. A "Load more..." `CTkButton`
 appends the next 50 on each click, preventing widget overload for sessions with 200+ turns.
 
-### 6.8 SettingsView (`views/settings_view.py`)
+### 6.6 SettingsView (`views/settings_view.py`)
 
-Exposes the three threshold parameters from `TrajectoriesReport.__init__()` as interactive
+Exposes the two threshold parameters from `TrajectoriesReport.__init__()` as interactive
 controls for live re-analysis without the CLI.
 
 **Controls:**
@@ -525,10 +448,8 @@ controls for live re-analysis without the CLI.
 | Control type       | Parameter                         | Range        | Default |
 |--------------------|-----------------------------------|--------------|---------|
 | `CTkSlider`        | `quality_deficit_threshold`       | 0.01 – 0.50  | 0.15    |
-| `CTkSlider`        | `utilization_threshold`           | 0.01 – 0.50  | 0.20    |
 | `CTkSlider`        | `correction_lift_threshold`       | 1.0 – 5.0    | 1.5     |
-| `CTkEntry`         | `max_weeks`                       | integer      | 30      |
-| `CTkComboBox`      | `source_type`                     | auto/thal/jw | auto    |
+| `CTkEntry`         | `max_sessions`                    | integer      | 30      |
 
 Each slider is accompanied by a live value readout `CTkLabel` that updates as the slider moves.
 
@@ -561,10 +482,8 @@ Launch
 | Overview     | `OverviewView`       | Ctrl+1            |
 | Quality      | `QualityView`        | Ctrl+2            |
 | Timing       | `TimingView`         | Ctrl+3            |
-| Components   | `ComponentsView`     | Ctrl+4            |
-| Interactions | `InteractionsView`   | Ctrl+5            |
-| Sessions     | `SessionsView`       | Ctrl+6            |
-| Settings     | `SettingsView`       | Ctrl+7            |
+| Sessions     | `SessionsView`       | Ctrl+4            |
+| Settings     | `SettingsView`       | Ctrl+5            |
 
 All nav buttons except "Load" are `state="disabled"` until `on_result_ready()` fires.
 
@@ -584,11 +503,10 @@ The GUI does not modify any file under `analyzer/`. It reuses the pipeline as a 
 from analyzer.loader import TrajectoriesLoader
 from analyzer.report import TrajectoriesReport
 
-loader = TrajectoriesLoader(log_dir, max_weeks=max_weeks, source_type=source_type)
+loader = TrajectoriesLoader(log_dir, max_sessions=max_sessions, source_type="auto")
 reporter = TrajectoriesReport(
     loader,
     quality_deficit_threshold=qd_thresh,
-    utilization_threshold=util_thresh,
     correction_lift_threshold=lift_thresh,
 )
 result = reporter.run()
@@ -615,8 +533,6 @@ TraceHoundApp.on_result_ready(result, loader)
       ├──► OverviewView.refresh(result, loader)
       ├──► QualityView.refresh(result)
       ├──► TimingView.refresh(result)
-      ├──► ComponentsView.refresh(result, loader)
-      ├──► InteractionsView.refresh(result)
       ├──► SessionsView.refresh(loader)
       └──► SettingsView.refresh(result, reporter)
 ```
@@ -633,10 +549,10 @@ No installation required. Works from the repo root:
 
 ```bash
 # macOS / Linux
-python -m analyzer_gui --log-dir /Users/mishka/.jiuwenswarm --max-weeks 30
+python -m analyzer_gui --log-dir /Users/mishka/.jiuwenswarm --max-sessions 30
 
 # Windows
-python -m analyzer_gui --log-dir C:\Users\m00645993\.jiuwenswarm --max-weeks 30
+python -m analyzer_gui --log-dir C:\Users\m00645993\.jiuwenswarm --max-sessions 30
 ```
 
 ### 9.2 Relationship to the existing CLI
@@ -695,12 +611,12 @@ Files to create:
 - `analyzer_gui/widgets/mpl_frame.py`
 - `analyzer_gui/views/overview_view.py`
 
-Acceptance test: all 13 stat cards populate from a real jiuwenswarm dataset. Colour coding on
+Acceptance test: all stat cards populate from a real jiuwenswarm dataset. Colour coding on
 overall_mean is correct (green > 0.70, yellow 0.50–0.70, red < 0.50).
 
 ### Phase 3: Quality View
 
-**Goal:** matplotlib chart shows per-week quality with correct trend colour.
+**Goal:** matplotlib chart shows per-session quality with correct trend colour.
 
 Files to create:
 - `analyzer_gui/views/quality_view.py`
@@ -708,8 +624,8 @@ Files to create:
 Uses `MplFrame` from Phase 2 and a plain `CTkScrollableFrame` row list for the table (replaced
 in Phase 4).
 
-Acceptance test: chart renders for a 30-week dataset; best/worst week annotations appear; table
-shows correct turn counts.
+Acceptance test: chart renders for a dataset; best/worst annotations appear; table shows correct
+turn counts.
 
 ### Phase 4: SortableTable + Timing View
 
@@ -724,27 +640,7 @@ Backfill `QualityView` to use `SortableTable`.
 Acceptance test: clicking a column header sorts the timing table. Slowest-turns tab shows correct
 10 entries. Histogram has correct bin counts and vertical markers.
 
-### Phase 5: Components View
-
-**Goal:** all three tabs of `ComponentsView` functional.
-
-Files to create:
-- `analyzer_gui/views/components_view.py`
-
-Acceptance test: with a thalamus dataset, flagged components appear in red. With a jiuwenswarm
-dataset, the "Budget Waste" tab shows the note about missing context configuration.
-
-### Phase 6: Interactions View
-
-Files to create:
-- `analyzer_gui/views/interactions_view.py`
-
-Also add signal disagreement as a collapsible section inside `OverviewView`.
-
-Acceptance test: toxic pairs shown in red rows; synergistic in green. "Not enough data" label
-appears when `n_pairs_evaluated == 0`.
-
-### Phase 7: Sessions View
+### Phase 5: Sessions View
 
 **Goal:** browse raw session data turn by turn.
 
@@ -752,20 +648,19 @@ Files to create:
 - `analyzer_gui/views/sessions_view.py`
 
 Acceptance test: clicking a session ID populates the right panel. Clicking a turn header expands
-it. "Load more…" appends 50 turns. No crash on sessions with 200+ turns.
+it. "Load more..." appends 50 turns. No crash on sessions with 200+ turns.
 
-### Phase 8: Settings View + Export
+### Phase 6: Settings View + Export
 
 **Goal:** sliders adjust thresholds; "Re-Run" triggers a new analysis; export buttons work.
 
 Files to create:
 - `analyzer_gui/views/settings_view.py`
 
-Acceptance test: move `quality_deficit_threshold` from 0.15 to 0.30, click Re-Run — fewer
-components are flagged. "Export JSON" saves a valid JSON file matching the CLI `--format json`
-output.
+Acceptance test: move `quality_deficit_threshold` from 0.15 to 0.30, click Re-Run — analysis updates.
+"Export JSON" saves a valid JSON file matching the CLI `--format json` output.
 
-### Phase 9: Polish + Cross-Platform Testing
+### Phase 7: Polish + Cross-Platform Testing
 
 - Test on Windows 11 Python 3.12 official installer.
 - Test on macOS 14 Intel and ARM with Python 3.12.
@@ -780,12 +675,11 @@ output.
 | Widget class                   | Package        | Used in                                       |
 |--------------------------------|----------------|-----------------------------------------------|
 | `CTkFrame`                     | customtkinter  | All views (base layout container)             |
-| `CTkScrollableFrame`           | customtkinter  | OverviewView, SessionsView, BudgetWaste       |
-| `CTkTabview`                   | customtkinter  | ComponentsView, TimingView, InteractionsView  |
+| `CTkScrollableFrame`           | customtkinter  | OverviewView, SessionsView                    |
+| `CTkTabview`                   | customtkinter  | TimingView                                    |
 | `CTkButton`                    | customtkinter  | Nav rail, Browse, Run, Export                 |
 | `CTkLabel`                     | customtkinter  | All views (static text)                       |
-| `CTkEntry`                     | customtkinter  | LoadView dir input, SettingsView weeks        |
-| `CTkComboBox`                  | customtkinter  | LoadView source_type, SettingsView            |
+| `CTkEntry`                     | customtkinter  | LoadView dir input, SettingsView sessions     |
 | `CTkSlider`                    | customtkinter  | SettingsView threshold controls               |
 | `CTkProgressBar`               | customtkinter  | LoadView analysis progress indicator          |
 | `CTkTextbox`                   | customtkinter  | OverviewView text preview, SessionsView turns |
@@ -807,19 +701,8 @@ a "Retry" button that returns the user to `LoadView`.
 ### Empty dataset
 
 If `result.data_health.total_turns == 0`, all views show an empty-state `CTkLabel`:
-"No turns loaded. Check the log directory and source type."
-Timing, Components, and Interactions views hide their `MplFrame` and `SortableTable` widgets
-to avoid rendering empty charts.
-
-### jiuwenswarm vs thalamus capability differences
-
-Several analyzers produce no data for jiuwenswarm sessions (no skills/memory/tools context
-configuration). Views check `loader.source_type` and display informational banners:
-
-> "Budget waste analysis is only available for thalamus format logs.
->  jiuwenswarm session logs do not include context configuration fields."
-
-This mirrors the logic already present in `report.py`'s `render_text()`.
+"No turns loaded. Check the log directory."
+Timing views hide their `MplFrame` and `SortableTable` widgets to avoid rendering empty charts.
 
 ### Thread safety
 
@@ -879,8 +762,6 @@ analyzer_gui/views/load_view.py
 analyzer_gui/views/overview_view.py
 analyzer_gui/views/quality_view.py
 analyzer_gui/views/timing_view.py
-analyzer_gui/views/components_view.py
-analyzer_gui/views/interactions_view.py
 analyzer_gui/views/sessions_view.py
 analyzer_gui/views/settings_view.py
 analyzer_gui/widgets/__init__.py
@@ -889,8 +770,8 @@ analyzer_gui/widgets/sortable_table.py
 analyzer_gui/widgets/mpl_frame.py
 ```
 
-**18 new files. Zero changes to files under `analyzer/`.**
+**15 new files. Zero changes to files under `analyzer/`.**
 
-New entry point: `python -m analyzer_gui [--log-dir PATH] [--max-weeks N] [--source-type TYPE]`
+New entry point: `python -m analyzer_gui [--log-dir PATH] [--max-sessions N]`
 
 Existing CLI unchanged: `python -m analyzer --log-dir PATH ...`
