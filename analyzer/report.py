@@ -16,6 +16,7 @@ Usage::
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -55,6 +56,10 @@ from .analyzers.signal_disagreement import (
     SignalDisagreementAnalyzer,
     SignalDisagreementResult,
 )
+from .analyzers.time_bottlenecks import (
+    TimeBottlenecksAnalyzer,
+    TimeBottlenecksResult,
+)
 from .loader import TrajectoriesLoader, TurnRecord
 from .scorer import compute_qualities
 
@@ -71,6 +76,7 @@ class ReportResult:
     conversation_length: ConversationLengthResult
     signal_disagreement: SignalDisagreementResult
     component_interactions: ComponentInteractionsResult
+    time_bottlenecks: TimeBottlenecksResult
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +90,7 @@ class ReportResult:
             "conversation_length": self.conversation_length.to_dict(),
             "signal_disagreement": self.signal_disagreement.to_dict(),
             "component_interactions": self.component_interactions.to_dict(),
+            "time_bottlenecks": self.time_bottlenecks.to_dict(),
         }
 
 
@@ -145,6 +152,12 @@ class TrajectoriesReport:
 
         component_interactions = ComponentInteractionsAnalyzer(turns, qualities).analyze()
 
+        time_bottlenecks = TimeBottlenecksAnalyzer(
+            turns,
+            qualities,
+            tool_call_timings=self._loader.tool_call_timings,
+        ).analyze()
+
         return ReportResult(
             generated_at=datetime.now(tz=timezone.utc),
             data_health=data_health,
@@ -156,6 +169,7 @@ class TrajectoriesReport:
             conversation_length=conversation_length,
             signal_disagreement=signal_disagreement,
             component_interactions=component_interactions,
+            time_bottlenecks=time_bottlenecks,
         )
 
     # ------------------------------------------------------------------
@@ -186,6 +200,7 @@ class TrajectoriesReport:
         cl = result.conversation_length
         sd = result.signal_disagreement
         ci = result.component_interactions
+        tb = result.time_bottlenecks
 
         lines.append("=== Trajectories Analyzer Report ===")
         lines.append(f"Generated: {result.generated_at.strftime('%Y-%m-%dT%H:%M:%SZ')}")
@@ -203,9 +218,23 @@ class TrajectoriesReport:
                 f"  Date range:  {dh.date_range[0].strftime('%Y-%m-%d')} → "
                 f"{dh.date_range[1].strftime('%Y-%m-%d')}"
             )
-        lines.append(
-            f"  Log files:   {len(dh.log_files_found)} ({', '.join(dh.log_files_found) or 'none'})"
-        )
+
+        # For jiuwenswarm sessions all files are named "history.jsonl" — show
+        # the count and the distinct session IDs instead of repeating the filename.
+        n_log_files = len(dh.log_files_found)
+        unique_names = sorted(set(dh.log_files_found))
+        if len(unique_names) == 1 and unique_names[0] == "history.jsonl":
+            session_ids = [p.parent.name for p in self._loader.log_files()]
+            lines.append(f"  Sessions loaded: {n_log_files}")
+            if session_ids:
+                preview = session_ids[:5]
+                suffix = f"  (+ {len(session_ids) - 5} more)" if len(session_ids) > 5 else ""
+                lines.append(f"  Session IDs: {', '.join(preview)}{suffix}")
+        else:
+            lines.append(
+                f"  Log files:   {n_log_files} ({', '.join(unique_names) or 'none'})"
+            )
+
         lines.append(f"  Explicit rating coverage: {dh.explicit_rating_coverage:.1%}")
         lines.append(f"  LLM judge coverage:       {dh.llm_judge_coverage:.1%}")
         lines.append(f"  Skipped (malformed):      {dh.skipped_records}")
@@ -274,7 +303,109 @@ class TrajectoriesReport:
             lines.append(f"  (LLM judge score or explicit rating overrides the formula when available)")
 
         # ------------------------------------------------------------------
+        # Time bottlenecks
+        # ------------------------------------------------------------------
+        h("Time Bottlenecks")
+        if tb.n_turns_with_timing == 0:
+            lines.append(
+                f"  No timing data available ({tb.n_turns_total} turns total)."
+            )
+        else:
+            lines.append(f"  Timed turns: {tb.n_turns_with_timing} / {tb.n_turns_total}")
+            lines.append(
+                f"  Duration:  min={tb.min_duration_s:.1f}s"
+                f"  median={tb.median_duration_s:.1f}s"
+                f"  mean={tb.mean_duration_s:.1f}s"
+                f"  p90={tb.p90_duration_s:.1f}s"
+                f"  max={tb.max_duration_s:.1f}s"
+            )
+            lines.append(
+                f"  Total wall-clock time: {tb.total_time_s:.1f}s"
+                f" ({tb.total_time_s / 60:.1f} min)"
+            )
+
+            verdict_label = {
+                "slower_is_better": "slower turns have HIGHER quality (+delta)",
+                "slower_is_worse":  "slower turns have LOWER quality (possible timeout/overload)",
+                "no_correlation":   "no meaningful correlation between speed and quality",
+            }.get(tb.speed_quality_verdict, tb.speed_quality_verdict)
+            lines.append(
+                f"  Speed/quality: {verdict_label}"
+                f"  (slow_q={tb.slow_quartile_mean_quality:.3f}"
+                f"  fast_q={tb.fast_half_mean_quality:.3f})"
+            )
+
+            if tb.slowest_turns:
+                lines.append(f"  Slowest turns (top {len(tb.slowest_turns)}):")
+                for rec in tb.slowest_turns:
+                    status = "ERR" if rec.has_error else ("OK" if rec.task_completed else "?")
+                    tools_str = ", ".join(rec.tools_called[:4])
+                    if len(rec.tools_called) > 4:
+                        tools_str += f" +{len(rec.tools_called) - 4}"
+                    lines.append(
+                        f"    {rec.turn_id[:28]:28s}  {rec.duration_seconds:7.1f}s"
+                        f"  [{status}]  q={rec.quality:.3f}  msgs={rec.n_messages}"
+                        + (f"  [{tools_str}]" if tools_str else "")
+                    )
+
+            if tb.tool_turn_correlation:
+                lines.append(
+                    f"  Tool turn-duration correlation"
+                    f" ({len(tb.tool_turn_correlation)} tools, sorted by slowdown ratio):"
+                )
+                for tc in tb.tool_turn_correlation[:10]:
+                    marker = " <-- SLOW" if tc.duration_ratio >= 1.5 else ""
+                    lines.append(
+                        f"    {tc.tool_name:30s}  ratio={tc.duration_ratio:.2f}x"
+                        f"  mean={tc.mean_turn_duration_s:.1f}s  n={tc.n_turns}{marker}"
+                    )
+
+            if tb.tool_call_timing:
+                lines.append(
+                    f"  Per-tool call timing"
+                    f" ({len(tb.tool_call_timing)} tools with timed calls, sorted by mean):"
+                )
+                for ts in tb.tool_call_timing[:10]:
+                    lines.append(
+                        f"    {ts.tool_name:30s}  mean={ts.mean_duration_s:.2f}s"
+                        f"  median={ts.median_duration_s:.2f}s"
+                        f"  p90={ts.p90_duration_s:.2f}s"
+                        f"  max={ts.max_duration_s:.2f}s"
+                        f"  n={ts.n_timed_calls}"
+                        f"  total={ts.total_time_s:.1f}s"
+                    )
+
+            if tb.hourly_distribution:
+                lines.append(
+                    f"  Hourly activity (UTC) — {len(tb.hourly_distribution)} active hours:"
+                )
+                for hb in tb.hourly_distribution:
+                    bar = "#" * min(hb.n_turns, 20)
+                    lines.append(
+                        f"    {hb.hour:02d}:00  {bar:<20s}  n={hb.n_turns:3d}"
+                        f"  mean_q={hb.mean_quality:.3f}"
+                        f"  mean_dur={hb.mean_duration_s:.1f}s"
+                        f"  err={hb.error_rate:.0%}"
+                    )
+
+        # ------------------------------------------------------------------
+        # Tool call frequency (always shown, not verbose-only)
+        # ------------------------------------------------------------------
+        if self._turns:
+            all_tools: list[str] = []
+            for t in self._turns:
+                all_tools.extend(t.tools_called)
+            if all_tools:
+                h("Tool Call Frequency")
+                tool_counts = Counter(all_tools)
+                for tool, count in tool_counts.most_common(20):
+                    bar = "#" * min(count, 30)
+                    lines.append(f"  {tool:35s} {bar:<30s} {count:4d}")
+
+        # ------------------------------------------------------------------
         # Component bottlenecks (with severity + type breakdown)
+        # Note: empty for jiuwenswarm sessions — no skills/memory/tools config
+        # in session format; only tool_calls are available.
         # ------------------------------------------------------------------
         n_flagged = len(cp.flagged_components)
         h(f"Component Bottlenecks ({n_flagged} flagged)")
@@ -291,6 +422,11 @@ class TrajectoriesReport:
                 )
         elif not cp.flagged_components:
             lines.append("  No bottleneck components detected.")
+            if self._loader.source_type == "jiuwenswarm_sessions":
+                lines.append(
+                    "  (jiuwenswarm session logs do not carry skills/memory/tools context;"
+                    " only tool_calls are available for analysis)"
+                )
 
         if cp.flagged_components and len(cp.flagged_components) > len(cp.top_priority_fixes):
             lines.append(
@@ -299,13 +435,13 @@ class TrajectoriesReport:
 
         if cp.type_breakdown:
             lines.append("  Context budget by type:")
-            for tb in cp.type_breakdown:
+            for tb_row in cp.type_breakdown:
                 lines.append(
-                    f"    {tb.component_type:8s}  {tb.n_components} components"
-                    f"  budget={tb.budget_fraction:.1%}"
-                    f"  quality={tb.mean_quality:.3f}"
-                    f"  completion={tb.mean_task_completion:.1%}"
-                    f"  flagged={tb.n_flagged}"
+                    f"    {tb_row.component_type:8s}  {tb_row.n_components} components"
+                    f"  budget={tb_row.budget_fraction:.1%}"
+                    f"  quality={tb_row.mean_quality:.3f}"
+                    f"  completion={tb_row.mean_task_completion:.1%}"
+                    f"  flagged={tb_row.n_flagged}"
                 )
 
         # ------------------------------------------------------------------
@@ -348,19 +484,26 @@ class TrajectoriesReport:
             )
         if total_waste == 0:
             lines.append("  No budget waste detected.")
+            if self._loader.source_type == "jiuwenswarm_sessions":
+                lines.append(
+                    "  (jiuwenswarm session logs do not carry context configuration;"
+                    " budget analysis requires thalamus turn logs)"
+                )
 
         # ------------------------------------------------------------------
         # Correction patterns
         # ------------------------------------------------------------------
-        h(f"Correction Patterns (top {min(5, len(crp.high_lift_components))})")
+        h("Correction Patterns")
         lines.append(
             f"  Baseline correction rate: {crp.baseline_correction_rate:.1%}  "
             f"({crp.total_corrected_turns}/{crp.total_turns} turns)"
         )
         if crp.high_lift_components:
+            n_high_lift = len(crp.high_lift_components)
+            lines.append(f"  High-lift patterns (top {min(5, n_high_lift)}):")
             for p in crp.high_lift_components[:5]:
                 lines.append(
-                    f"  {p.component_type}: {p.component}"
+                    f"    {p.component_type}: {p.component}"
                     f"  correction={p.correction_rate:.1%}  lift={p.lift:.2f}×"
                     f"  n={p.n_turns_included}"
                 )
@@ -420,14 +563,14 @@ class TrajectoriesReport:
                 f"  p90={cl.p90_length:.1f}  max={cl.max_length}"
             )
             lines.append(
-                f"  Long turns (≥4):  {cl.n_long_successful} successful"
+                f"  Long turns (>=4):  {cl.n_long_successful} successful"
                 f"  / {cl.n_long_failed} failed"
             )
             lines.append("  Quality by length bucket:")
             for b in cl.buckets:
                 if b.n_turns > 0:
                     lines.append(
-                        f"    {b.label:10s} (len {b.min_length}–{'∞' if b.max_length > 100 else b.max_length}):"
+                        f"    {b.label:10s} (len {b.min_length}-{'inf' if b.max_length > 100 else b.max_length}):"
                         f"  n={b.n_turns}  quality={b.mean_quality:.3f}"
                         f"  completion={b.task_completion_rate:.1%}"
                     )
@@ -439,7 +582,7 @@ class TrajectoriesReport:
                 for c in cl.components_flagged_long[:5]:
                     lines.append(
                         f"    {c.component_type}: {c.name}"
-                        f"  median_len={c.median_length:.1f}  ratio={c.length_ratio:.2f}×"
+                        f"  median_len={c.median_length:.1f}  ratio={c.length_ratio:.2f}x"
                     )
             else:
                 lines.append("  No components consistently inflate conversation length.")
@@ -482,7 +625,7 @@ class TrajectoriesReport:
                 lines.append(f"  Worst disagreements (top {min(3, len(sd.worst_disagreements))}):")
                 for d in sd.worst_disagreements[:3]:
                     lines.append(
-                        f"    {d.turn_id[:16]}…  explicit={d.explicit_rating}"
+                        f"    {d.turn_id[:16]}...  explicit={d.explicit_rating}"
                         f"  formula={d.formula_score:.2f}  delta={d.delta:.2f}"
                         f"  [{d.disagreement_type}]"
                     )
@@ -505,7 +648,7 @@ class TrajectoriesReport:
             lines.append("  Not enough co-occurrence data to evaluate pairs.")
         else:
             if ci.toxic_pairs:
-                lines.append(f"  Toxic combinations ({n_toxic}) — avoid pairing these:")
+                lines.append(f"  Toxic combinations ({n_toxic}) -- avoid pairing these:")
                 for p in ci.toxic_pairs[:3]:
                     lines.append(
                         f"    {p.type_a}:{p.component_a}  +  {p.type_b}:{p.component_b}"
@@ -518,7 +661,7 @@ class TrajectoriesReport:
                 lines.append("  No toxic combinations detected.")
 
             if ci.synergistic_pairs:
-                lines.append(f"  Synergistic combinations ({n_synergy}) — these work well together:")
+                lines.append(f"  Synergistic combinations ({n_synergy}) -- these work well together:")
                 for p in ci.synergistic_pairs[:3]:
                     lines.append(
                         f"    {p.type_a}:{p.component_a}  +  {p.type_b}:{p.component_b}"
@@ -527,20 +670,6 @@ class TrajectoriesReport:
                     )
             else:
                 lines.append("  No synergistic combinations detected.")
-
-        v("Tool Usage")
-        if verbose and self._turns:
-            from collections import Counter
-            all_tools: list[str] = []
-            for t in self._turns:
-                all_tools.extend(t.tools_called)
-            if all_tools:
-                tool_counts = Counter(all_tools)
-                lines.append("  Tool call frequency:")
-                for tool, count in tool_counts.most_common(15):
-                    lines.append(f"    {tool:30s}  {count:3d} call{'s' if count > 1 else ''}")
-            else:
-                lines.append("  No tool calls recorded.")
 
         return "\n".join(lines)
 
@@ -551,7 +680,7 @@ class TrajectoriesReport:
         def h(title: str) -> None:
             lines.append(f"\n=== {title} ===")
 
-        lines.append("=== TraceHound Verbose Report ===")
+        lines.append("=== TraceHound Session Detail ===")
         lines.append(f"Generated: {result.generated_at.strftime('%Y-%m-%dT%H:%M:%SZ')}")
         lines.append(f"Source type: {loader.source_type}")
         lines.append(f"Sessions loaded: {len(loader.raw_sessions)}")
@@ -563,10 +692,22 @@ class TrajectoriesReport:
         dh = result.data_health
         cl = result.conversation_length
         crp = result.correction_patterns
+        tb = result.time_bottlenecks
         lines.append(f"  Mean quality: {qt.overall_mean:.3f}")
-        lines.append(f"  Completed: {dh.total_turns - crp.total_corrected_turns}/{dh.total_turns}   Corrections: {crp.total_corrected_turns}")
+        lines.append(
+            f"  Completed: {dh.total_turns - crp.total_corrected_turns}/{dh.total_turns}"
+            f"   Corrections: {crp.total_corrected_turns}"
+        )
         if cl.total_turns > 0:
-            lines.append(f"  Length range: {cl.min_length}-{cl.max_length}   median={cl.median_length:.1f}")
+            lines.append(
+                f"  Length range: {cl.min_length}-{cl.max_length}   median={cl.median_length:.1f}"
+            )
+        if tb.n_turns_with_timing > 0:
+            lines.append(
+                f"  Duration: median={tb.median_duration_s:.1f}s"
+                f"  p90={tb.p90_duration_s:.1f}s"
+                f"  total={tb.total_time_s:.0f}s ({tb.total_time_s / 60:.1f} min)"
+            )
 
         # Per-session detail
         h("Session Details")
@@ -586,7 +727,9 @@ class TrajectoriesReport:
             lines.append(f"    File: {path}")
             lines.append(f"    Messages: {n_messages}   Turns: {n_turns}")
 
-            for req_id, messages in sorted(by_req.items(), key=lambda x: float(x[1][0].get("timestamp", 0))):
+            for req_id, messages in sorted(
+                by_req.items(), key=lambda x: float(x[1][0].get("timestamp", 0))
+            ):
                 messages.sort(key=lambda m: float(m.get("timestamp", 0)))
 
                 user_msgs = [m for m in messages if m.get("role") == "user"]
@@ -611,7 +754,10 @@ class TrajectoriesReport:
                 final_content = ""
                 for m in messages:
                     if m.get("role") == "assistant" and m.get("event_type") not in (
-                        "chat.tool_call", "chat.tool_update", "chat.usage_metadata", "chat.tool_result"
+                        "chat.tool_call",
+                        "chat.tool_update",
+                        "chat.usage_metadata",
+                        "chat.tool_result",
                     ):
                         c = m.get("content", "")
                         if c:
@@ -626,7 +772,10 @@ class TrajectoriesReport:
                     duration = "?"
 
                 status = "ERROR" if has_error else ("OK" if final_content else "NO_CONTENT")
-                lines.append(f"\n    Turn: {req_id[:28]}   Status: {status}   Duration: {duration}   Msgs: {len(messages)}")
+                lines.append(
+                    f"\n    Turn: {req_id[:28]}   Status: {status}"
+                    f"   Duration: {duration}   Msgs: {len(messages)}"
+                )
                 lines.append(f"      User: {user_preview}")
                 if tools:
                     lines.append(f"      Tools: {', '.join(tools)}")
