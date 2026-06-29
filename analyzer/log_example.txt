@@ -1,6 +1,6 @@
 (jiuwenswarm) PS C:\Workspace\openjiuwen\TraceHound> python -m analyzer --log-dir C:\Users\m00645993\.jiuwenswarm --max-weeks 30 -v
 === Trajectories Analyzer Report ===
-Generated: 2026-06-29T20:25:33Z
+Generated: 2026-06-29T21:05:28Z
 Mode: VERBOSE (showing per-turn evidence and calculations)
 
 
