@@ -469,3 +469,97 @@ class TrajectoriesReport:
                 lines.append("  No synergistic combinations detected.")
 
         return "\n".join(lines)
+
+    def render_verbose(self, result: ReportResult, loader) -> str:
+        """Return a detailed per-session, per-turn report showing actual trajectory content."""
+        lines: list[str] = []
+
+        def h(title: str) -> None:
+            lines.append(f"\n=== {title} ===")
+
+        lines.append("=== TraceHound Verbose Report ===")
+        lines.append(f"Generated: {result.generated_at.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+        lines.append(f"Source type: {loader.source_type}")
+        lines.append(f"Sessions loaded: {len(loader.raw_sessions)}")
+        lines.append(f"Total turns: {result.data_health.total_turns}")
+
+        # Quick summary
+        h("Quick Summary")
+        qt = result.quality_trends
+        dh = result.data_health
+        cl = result.conversation_length
+        crp = result.correction_patterns
+        lines.append(f"  Mean quality: {qt.overall_mean:.3f}")
+        lines.append(f"  Completed: {dh.total_turns - crp.total_corrected_turns}/{dh.total_turns}   Corrections: {crp.total_corrected_turns}")
+        if cl.total_turns > 0:
+            lines.append(f"  Length range: {cl.min_length}-{cl.max_length}   median={cl.median_length:.1f}")
+
+        # Per-session detail
+        h("Session Details")
+        for path, raw_messages in loader.raw_sessions.items():
+            session_name = path.parent.name
+            n_messages = len(raw_messages)
+
+            # Group by request_id
+            by_req: dict[str, list[dict]] = {}
+            for m in raw_messages:
+                req = str(m.get("request_id", ""))
+                if req:
+                    by_req.setdefault(req, []).append(m)
+
+            n_turns = len(by_req)
+            lines.append(f"\n  [SESSION] {session_name}")
+            lines.append(f"    File: {path}")
+            lines.append(f"    Messages: {n_messages}   Turns: {n_turns}")
+
+            for req_id, messages in sorted(by_req.items(), key=lambda x: float(x[1][0].get("timestamp", 0))):
+                messages.sort(key=lambda m: float(m.get("timestamp", 0)))
+
+                user_msgs = [m for m in messages if m.get("role") == "user"]
+                user_content = user_msgs[0].get("content", "") if user_msgs else ""
+                user_preview = user_content[:180] + ("..." if len(user_content) > 180 else "")
+
+                error_msgs = [m for m in messages if m.get("event_type") == "chat.error"]
+                has_error = bool(error_msgs)
+                error_text = ""
+                if error_msgs:
+                    err = error_msgs[0].get("error", "")
+                    error_text = err[:180] + ("..." if len(err) > 180 else "")
+
+                tools: list[str] = []
+                for m in messages:
+                    if m.get("event_type") == "chat.tool_call":
+                        tc = m.get("tool_call") or {}
+                        name = tc.get("name")
+                        if name and name not in tools:
+                            tools.append(name)
+
+                final_content = ""
+                for m in messages:
+                    if m.get("role") == "assistant" and m.get("event_type") not in (
+                        "chat.tool_call", "chat.tool_update", "chat.usage_metadata", "chat.tool_result"
+                    ):
+                        c = m.get("content", "")
+                        if c:
+                            final_content = c[:180] + ("..." if len(c) > 180 else "")
+                            break
+
+                try:
+                    t0 = float(messages[0].get("timestamp", 0))
+                    t1 = float(messages[-1].get("timestamp", 0))
+                    duration = f"{t1 - t0:.1f}s"
+                except (ValueError, TypeError):
+                    duration = "?"
+
+                status = "ERROR" if has_error else ("OK" if final_content else "NO_CONTENT")
+                lines.append(f"\n    Turn: {req_id[:28]}   Status: {status}   Duration: {duration}   Msgs: {len(messages)}")
+                lines.append(f"      User: {user_preview}")
+                if tools:
+                    lines.append(f"      Tools: {', '.join(tools)}")
+                if has_error:
+                    lines.append(f"      Error: {error_text}")
+                if final_content and not has_error:
+                    lines.append(f"      Result: {final_content}")
+
+        lines.append("")
+        return "\n".join(lines)

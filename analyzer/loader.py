@@ -263,6 +263,7 @@ class TrajectoriesLoader:
             source_type if source_type != "auto" else _detect_source_type(self._log_dir)
         )
         self._skipped: int = 0
+        self._raw_sessions: dict[Path, list[dict]] = {}
 
     @property
     def source_type(self) -> str:
@@ -273,6 +274,16 @@ class TrajectoriesLoader:
     def skipped_records(self) -> int:
         """Number of records skipped during the last ``load()`` call."""
         return self._skipped
+
+    @property
+    def raw_sessions(self) -> dict[Path, list[dict]]:
+        """Raw session data from the last ``load()`` call.
+
+        Maps file path -> list of raw message dicts (jiuwenswarm format)
+        or list of raw turn dicts (thalamus format).
+        Available only after ``load()`` has been called.
+        """
+        return self._raw_sessions
 
     def log_files(self) -> list[Path]:
         """Return matching log file paths sorted newest-first, up to max_weeks."""
@@ -300,6 +311,7 @@ class TrajectoriesLoader:
     def load(self) -> list[TurnRecord]:
         """Load and parse all turn records, sorted by timestamp ascending."""
         self._skipped = 0
+        self._raw_sessions = {}
         records: list[TurnRecord] = []
 
         if self._source_type == "jiuwenswarm_sessions":
@@ -335,6 +347,7 @@ class TrajectoriesLoader:
                     self._skipped += 1
                 else:
                     records.append(record)
+                self._raw_sessions.setdefault(path, []).append(raw)
 
         return records
 
@@ -373,5 +386,9 @@ class TrajectoriesLoader:
                     self._skipped += 1
                 else:
                     records.append(record)
+            self._raw_sessions[path] = [
+                raw for raw in (json.loads(line) for line in text.splitlines() if line.strip())
+                if isinstance(raw, dict)
+            ]
 
         return records
