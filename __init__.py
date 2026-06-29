@@ -4,7 +4,7 @@ Reads thalamus weekly turn-log JSONL files and surfaces actionable diagnostics.
 
 Quick start::
 
-    from jiuwenswarm.trajectories_analyzer import TrajectoriesLoader, TrajectoriesReport
+    from . import TrajectoriesLoader, TrajectoriesReport
 
     loader = TrajectoriesLoader("/path/to/online_logs", max_weeks=8)
     report = TrajectoriesReport(loader)
@@ -16,22 +16,22 @@ CLI entry point::
     jiuwenswarm-analyze-trajectories --log-dir /path/to/online_logs
 """
 
-from .analyzers import (
+from analyzer.analyzers import (
     ComponentInteractionsAnalyzer,
     ComponentInteractionsResult,
     ComponentPair,
 )
-from .analyzers import (
+from analyzer.analyzers import (
     ConversationLengthAnalyzer,
     ConversationLengthResult,
 )
-from .analyzers import (
+from analyzer.analyzers import (
     SignalDisagreementAnalyzer,
     SignalDisagreementResult,
 )
-from .loader import TrajectoriesLoader, TurnRecord
-from .report import ReportResult, TrajectoriesReport
-from .scorer import compute_qualities, compute_quality
+from analyzer.loader import TrajectoriesLoader, TurnRecord
+from analyzer.report import ReportResult, TrajectoriesReport
+from analyzer.scorer import compute_qualities, compute_quality
 
 __all__ = [
     "TrajectoriesLoader",

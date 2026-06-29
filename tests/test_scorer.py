@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from jiuwenswarm.trajectories_analyzer.loader import TrajectoriesLoader
-from jiuwenswarm.trajectories_analyzer.scorer import compute_qualities, compute_quality
+from analyzer.loader import TrajectoriesLoader
+from analyzer.scorer import compute_qualities, compute_quality
 
 
 def _make_turn(

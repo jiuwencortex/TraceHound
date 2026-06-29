@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jiuwenswarm.trajectories_analyzer.loader import TrajectoriesLoader, TurnRecord
+from analyzer.loader import TrajectoriesLoader
 
 
 def test_load_returns_sorted_turns(log_dir: Path) -> None:

@@ -4,9 +4,9 @@
 
 Usage::
 
-    jiuwenswarm-analyze-trajectories --log-dir /path/to/online_logs
-    jiuwenswarm-analyze-trajectories --log-dir /path/to/online_logs --format json --output report.json
-    jiuwenswarm-analyze-trajectories --log-dir /path/to/online_logs --max-weeks 4
+    TraceHound --log-dir /path/to/online_logs
+    TraceHound --log-dir /path/to/online_logs --format json --output report.json
+    TraceHound --log-dir /path/to/online_logs --max-weeks 4
 """
 
 from __future__ import annotations
@@ -16,18 +16,20 @@ import sys
 from pathlib import Path
 
 from loguru import logger
+from analyzer.loader import TrajectoriesLoader
+from analyzer.report import TrajectoriesReport
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="jiuwenswarm-analyze-trajectories",
-        description="Analyze thalamus or jiuwenswarm turn-log trajectories and report bottlenecks.",
+        prog="TraceHound",
+        description="Analyze jiuwenswarm turn-log trajectories and report bottlenecks.",
     )
     parser.add_argument(
         "--log-dir",
         required=True,
         metavar="PATH",
-        help="Directory containing log files.  For thalamus: a folder with turns_YYYY-WNN.jsonl files.  For jiuwenswarm: the ~/.jiuwenswarm directory (agent/sessions/*/history.jsonl will be discovered automatically).",
+        help="Directory containing log files.  Either a folder with turns_YYYY-WNN.jsonl files or the ~/.jiuwenswarm directory (agent/sessions/*/history.jsonl will be discovered automatically).",
     )
     parser.add_argument(
         "--max-weeks",
@@ -89,9 +91,6 @@ def main() -> None:
     if not log_dir.exists():
         logger.error("trajectories_analyzer: log directory does not exist: {}", log_dir)
         sys.exit(1)
-
-    from jiuwenswarm.trajectories_analyzer.loader import TrajectoriesLoader
-    from jiuwenswarm.trajectories_analyzer.report import TrajectoriesReport
 
     loader = TrajectoriesLoader(
         log_dir,

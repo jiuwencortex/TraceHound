@@ -8,18 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from jiuwenswarm.trajectories_analyzer.analyzers.budget_waste import BudgetWasteAnalyzer
-from jiuwenswarm.trajectories_analyzer.analyzers.component_performance import (
+from analyzer.analyzers import BudgetWasteAnalyzer
+from analyzer.analyzers.component_performance import (
     ComponentPerformanceAnalyzer,
 )
-from jiuwenswarm.trajectories_analyzer.analyzers.correction_patterns import (
+from analyzer.analyzers import (
     CorrectionPatternsAnalyzer,
 )
-from jiuwenswarm.trajectories_analyzer.analyzers.data_health import DataHealthAnalyzer
-from jiuwenswarm.trajectories_analyzer.analyzers.exploration_analysis import ExplorationAnalyzer
-from jiuwenswarm.trajectories_analyzer.analyzers.quality_trends import QualityTrendsAnalyzer
-from jiuwenswarm.trajectories_analyzer.loader import TrajectoriesLoader
-from jiuwenswarm.trajectories_analyzer.scorer import compute_qualities
+from analyzer.analyzers.data_health import DataHealthAnalyzer
+from analyzer.analyzers import ExplorationAnalyzer
+from analyzer.analyzers import QualityTrendsAnalyzer
+from analyzer.loader import TrajectoriesLoader
+from analyzer.scorer import compute_qualities
 
 
 @pytest.fixture

@@ -7,8 +7,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from jiuwenswarm.trajectories_analyzer.loader import TrajectoriesLoader
-from jiuwenswarm.trajectories_analyzer.report import TrajectoriesReport
+from analyzer.loader import TrajectoriesLoader
+from analyzer.report import TrajectoriesReport
 
 
 def test_report_run_produces_result(log_dir: Path) -> None:

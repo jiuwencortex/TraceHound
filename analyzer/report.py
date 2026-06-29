@@ -4,8 +4,8 @@
 
 Usage::
 
-    from jiuwenswarm.trajectories_analyzer.report import TrajectoriesReport
-    from jiuwenswarm.trajectories_analyzer.loader import TrajectoriesLoader
+    from .report import TrajectoriesReport
+    from .loader import TrajectoriesLoader
 
     loader = TrajectoriesLoader("/path/to/online_logs", max_weeks=8)
     report = TrajectoriesReport(loader)
