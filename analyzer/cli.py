@@ -45,9 +45,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Log format to expect.  'auto' detects from directory contents (default).",
     )
     parser.add_argument(
+        "--raw-logs",
+        action="store_true",
+        help="Dump raw per-session, per-turn trajectory content instead of the analysis report.",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
-        help="Show detailed per-session, per-turn trajectory content instead of summary.",
+        help="Show detailed analysis with per-turn evidence, breakdowns, and calculations.",
     )
     parser.add_argument(
         "--format",
@@ -111,12 +116,12 @@ def main() -> None:
 
     result = reporter.run()
 
-    if args.verbose:
+    if args.raw_logs:
         output_text = reporter.render_verbose(result, loader)
     elif args.format == "json":
         output_text = reporter.render_json(result)
     else:
-        output_text = reporter.render_text(result)
+        output_text = reporter.render_text(result, verbose=args.verbose)
 
     if args.output:
         out_path = Path(args.output)

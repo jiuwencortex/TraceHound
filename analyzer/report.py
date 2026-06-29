@@ -101,11 +101,15 @@ class TrajectoriesReport:
         self._quality_deficit = quality_deficit_threshold
         self._utilization_threshold = utilization_threshold
         self._correction_lift = correction_lift_threshold
+        self._turns: list[TurnRecord] = []
+        self._qualities: list[float] = []
 
     def run(self) -> ReportResult:
         """Load turns and run all analyzers."""
-        turns = self._loader.load()
-        qualities = compute_qualities(turns)
+        self._turns = self._loader.load()
+        self._qualities = compute_qualities(self._turns)
+        turns = self._turns
+        qualities = self._qualities
         log_files = self._loader.log_files()
 
         data_health = DataHealthAnalyzer(
@@ -162,12 +166,16 @@ class TrajectoriesReport:
         """Return machine-readable JSON."""
         return json.dumps(result.to_dict(), indent=2, ensure_ascii=False)
 
-    def render_text(self, result: ReportResult) -> str:  # noqa: C901
+    def render_text(self, result: ReportResult, verbose: bool = False) -> str:  # noqa: C901
         """Return a human-readable text report."""
         lines: list[str] = []
 
         def h(title: str) -> None:
             lines.append(f"\n--- {title} ---")
+
+        def v(title: str) -> None:
+            if verbose:
+                lines.append(f"\n  >>> {title}")
 
         dh = result.data_health
         qt = result.quality_trends
@@ -181,6 +189,9 @@ class TrajectoriesReport:
 
         lines.append("=== Trajectories Analyzer Report ===")
         lines.append(f"Generated: {result.generated_at.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+        if verbose:
+            lines.append("Mode: VERBOSE (showing per-turn evidence and calculations)")
+        lines.append("")
 
         # ------------------------------------------------------------------
         # Data health
@@ -202,6 +213,18 @@ class TrajectoriesReport:
             lines.append(f"  Low-data weeks:  {', '.join(dh.weeks_with_low_data)}")
         else:
             lines.append("  Low-data weeks:  none")
+
+        v("Data Health Evidence")
+        if verbose and self._loader.raw_sessions:
+            lines.append("  Per-session file details:")
+            for path, msgs in self._loader.raw_sessions.items():
+                sz = path.stat().st_size
+                sz_str = f"{sz/1024:.1f} KB" if sz > 1024 else f"{sz} B"
+                lines.append(f"    {path.parent.name}: {len(msgs)} messages, {sz_str}")
+        elif verbose and dh.log_files_found:
+            lines.append("  Per-log file details:")
+            for fname in dh.log_files_found:
+                lines.append(f"    {fname}")
 
         # ------------------------------------------------------------------
         # Quality trends
@@ -234,6 +257,21 @@ class TrajectoriesReport:
                 f"  +{w.n_explicit_positive}/-{w.n_explicit_negative} explicit"
                 f"  completed={w.n_task_completed}  corrections={w.n_follow_up_corrections}"
             )
+
+        v("Quality Evidence")
+        if verbose and self._turns:
+            turn_q = list(zip(self._turns, self._qualities))
+            turn_q.sort(key=lambda x: x[1], reverse=True)
+            lines.append("  Top 5 highest-quality turns:")
+            for t, q in turn_q[:5]:
+                status = "OK" if t.task_completed else ("ERR" if t.follow_up_correction else "?")
+                lines.append(f"    {t.turn_id[:28]:28s}  q={q:.3f}  [{status}]  len={t.conversation_length}")
+            lines.append("  Bottom 5 lowest-quality turns:")
+            for t, q in turn_q[-5:]:
+                status = "OK" if t.task_completed else ("ERR" if t.follow_up_correction else "?")
+                lines.append(f"    {t.turn_id[:28]:28s}  q={q:.3f}  [{status}]  len={t.conversation_length}")
+            lines.append(f"  Quality formula: 0.5 + 0.20*task_completed - 0.30*correction + max(0, 0.10 - 0.02*length)")
+            lines.append(f"  (LLM judge score or explicit rating overrides the formula when available)")
 
         # ------------------------------------------------------------------
         # Component bottlenecks (with severity + type breakdown)
@@ -329,6 +367,15 @@ class TrajectoriesReport:
         else:
             lines.append("  No high-lift correction patterns detected.")
 
+        v("Correction Evidence")
+        if verbose and self._turns:
+            error_turns = [(t, q) for t, q in zip(self._turns, self._qualities) if t.follow_up_correction]
+            if error_turns:
+                lines.append(f"  All {len(error_turns)} error turns (sorted by quality):")
+                error_turns.sort(key=lambda x: x[1])
+                for t, q in error_turns:
+                    lines.append(f"    {t.turn_id[:32]:32s}  q={q:.3f}  len={t.conversation_length}")
+
         # ------------------------------------------------------------------
         # Exploration
         # ------------------------------------------------------------------
@@ -396,6 +443,19 @@ class TrajectoriesReport:
                     )
             else:
                 lines.append("  No components consistently inflate conversation length.")
+
+            v("Conversation Length Evidence")
+            if verbose and self._turns:
+                lengths = [(t.turn_id, t.conversation_length, q) for t, q in zip(self._turns, self._qualities)]
+                lengths.sort(key=lambda x: x[1], reverse=True)
+                lines.append("  Longest turns (top 10):")
+                for tid, ln, q in lengths[:10]:
+                    lines.append(f"    {tid[:32]:32s}  len={ln:3d}  q={q:.3f}")
+                if len(lengths) > 20:
+                    lines.append("  ...")
+                    lines.append("  Shortest turns (bottom 5):")
+                    for tid, ln, q in lengths[-5:]:
+                        lines.append(f"    {tid[:32]:32s}  len={ln:3d}  q={q:.3f}")
         else:
             lines.append("  No turn data.")
 
@@ -467,6 +527,20 @@ class TrajectoriesReport:
                     )
             else:
                 lines.append("  No synergistic combinations detected.")
+
+        v("Tool Usage")
+        if verbose and self._turns:
+            from collections import Counter
+            all_tools: list[str] = []
+            for t in self._turns:
+                all_tools.extend(t.tools_called)
+            if all_tools:
+                tool_counts = Counter(all_tools)
+                lines.append("  Tool call frequency:")
+                for tool, count in tool_counts.most_common(15):
+                    lines.append(f"    {tool:30s}  {count:3d} call{'s' if count > 1 else ''}")
+            else:
+                lines.append("  No tool calls recorded.")
 
         return "\n".join(lines)
 
