@@ -55,7 +55,7 @@ from .analyzers.signal_disagreement import (
     SignalDisagreementAnalyzer,
     SignalDisagreementResult,
 )
-from .loader import TrajectoriesLoader
+from .loader import TrajectoriesLoader, TurnRecord
 from .scorer import compute_qualities
 
 

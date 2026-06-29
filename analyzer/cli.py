@@ -10,6 +10,7 @@ Usage::
 """
 
 # python -m analyzer --log-dir C:\Users\m00645993\.jiuwenswarm --max-weeks 30 -v
+# python -m analyzer --log-dir /Users/mishka/.jiuwenswarm --max-weeks 30 -v
 
 from __future__ import annotations
 
