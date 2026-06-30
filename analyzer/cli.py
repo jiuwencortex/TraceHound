@@ -32,20 +32,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--log-dir",
         required=True,
         metavar="PATH",
-        help="Directory containing log files.  Either a folder with turns_YYYY-WNN.jsonl files or the ~/.jiuwenswarm directory (agent/sessions/*/history.jsonl will be discovered automatically).",
+        help="Directory containing log files. Session histories at agent/sessions/*/history.jsonl are discovered automatically.",
     )
     parser.add_argument(
         "--max-weeks",
         type=int,
         default=8,
         metavar="N",
-        help="Number of session (jiuwenswarm) files to load (default: 8).",
-    )
-    parser.add_argument(
-        "--source-type",
-        choices=["auto", "jiuwenswarm_sessions"],
-        default="auto",
-        help="Log format to expect.  'auto' detects from directory contents (default).",
+        help="Maximum number of most-recent session files to load (default: 8).",
     )
     parser.add_argument(
         "--raw-logs",
@@ -70,23 +64,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write report to FILE instead of stdout.",
     )
     parser.add_argument(
-        "--threshold-quality",
-        type=float,
-        default=0.15,
-        metavar="FLOAT",
-        help=(
-            "Quality deficit threshold for component bottleneck flags "
-            "(default: 0.15, meaning components more than 0.15 below global mean are flagged)."
-        ),
-    )
-    parser.add_argument(
-        "--threshold-utilization",
-        type=float,
-        default=0.20,
-        metavar="FLOAT",
-        help="Utilization rate below which a component is flagged as rarely-used (default: 0.20).",
-    )
-    parser.add_argument(
         "--threshold-lift",
         type=float,
         default=1.5,
@@ -108,12 +85,9 @@ def main() -> None:
     loader = TrajectoriesLoader(
         log_dir,
         max_weeks=args.max_weeks,
-        source_type=args.source_type,
     )
     reporter = TrajectoriesReport(
         loader,
-        quality_deficit_threshold=args.threshold_quality,
-        utilization_threshold=args.threshold_utilization,
         correction_lift_threshold=args.threshold_lift,
     )
 
