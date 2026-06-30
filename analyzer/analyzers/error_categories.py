@@ -158,7 +158,7 @@ class ErrorCategoryAnalyzer:
         categories: list[CategoryStats] = []
         for cat in _KNOWN_CATEGORIES:
             count = cat_counter.get(cat, 0)
-            pct = (count / n_errors * 100.0) if n_errors else 0.0
+            pct = (count / n_errors) if n_errors else 0.0
             msgs = cat_messages.get(cat, [])
             # Top N most common distinct messages
             msg_counter = Counter(msgs)

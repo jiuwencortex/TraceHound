@@ -376,7 +376,7 @@ def _parse_jiuwenswarm_turn(
             output_tokens = max(output_tokens, int(usage.get("output_tokens") or 0))
             total_tokens = max(total_tokens, int(usage.get("total_tokens") or 0))
             model_name = str(m.get("model", model_name)) or model_name
-            usage_percent = max(usage_percent, float(m.get("usage_percent") or 0.0))
+            usage_percent = max(usage_percent, float(m.get("usage_percent") or 0.0)) / 100.0
             context_window_tokens = max(context_window_tokens, int(m.get("context_window_tokens") or 0))
         elif evt == "chat.usage_metadata":
             meta = m.get("metadata") or {}

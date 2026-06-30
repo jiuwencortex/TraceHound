@@ -73,10 +73,18 @@ def _looks_like_path(value: str) -> bool:
     """Heuristic: string value looks like a file path."""
     if len(value) > _MAX_FILE_PATH_LENGTH:
         return False
-    # Must contain path separator or extension dot, and not be a URL
+    # Must not be a URL
     if value.startswith(("http://", "https://", "ftp://", "file://")):
         return False
-    return "." in value or "/" in value or "\\" in value
+    has_sep = "/" in value or "\\" in value
+    has_dot = "." in value
+    has_space = " " in value
+    # Real paths have separators. Simple filenames have no spaces.
+    if has_sep:
+        return True
+    if has_dot and not has_space:
+        return True
+    return False
 
 
 def _extract_file_paths(obj) -> list[str]:
@@ -426,8 +434,13 @@ class ToolArgumentAnalyzer:
                 )
             )
 
-        # Read/write ratio (reads per write; 0 if no writes)
-        read_write_ratio = (read_count / write_count) if write_count > 0 else 0.0
+        # Read/write ratio (reads per write; inf if no writes but reads exist)
+        if read_count == 0 and write_count == 0:
+            read_write_ratio = 0.0
+        elif write_count == 0:
+            read_write_ratio = float("inf")
+        else:
+            read_write_ratio = read_count / write_count
 
         # Most common extensions
         most_common_extensions = ext_counter.most_common(_TOP_N_EXTENSIONS)

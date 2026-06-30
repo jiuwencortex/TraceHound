@@ -565,7 +565,10 @@ class TrajectoriesReport:
 
         v("Quality Evidence")
         if verbose and self._turns:
-            turn_q = sorted(zip(self._turns, self._qualities), key=lambda x: x[1], reverse=True)
+            turn_q = sorted(
+                [(t, q) for t, q in zip(self._turns, self._qualities) if not t.is_heartbeat],
+                key=lambda x: x[1], reverse=True
+            )
             lines.append("  Top 5 highest-quality turns:")
             for t, q in turn_q[:5]:
                 status = "OK" if t.task_completed else ("ERR" if t.follow_up_correction else "?")
@@ -631,7 +634,7 @@ class TrajectoriesReport:
                 marker = " ⚠" if pts.success_rate < 0.8 else ""
                 lines.append(f"    {pts.name:20s} {pts.success_rate:6.1%} ({pts.successes}/{pts.total_calls}){marker}")
         if ts.retry_patterns:
-            lines.append(f"  Retries: {len(ts.retry_patterns)}")
+            lines.append(f"  Repeated tool calls: {len(ts.retry_patterns)}")
             for rp in ts.retry_patterns[:3]:
                 lines.append(f"    {rp.tool_name}: {rp.n_turns_with_retries} turns, avg {rp.avg_calls_per_retry_turn:.1f} calls/turn")
         if ts.recovery_turns > 0:
@@ -761,8 +764,12 @@ class TrajectoriesReport:
                 for cs in ta.command_stats[:5]:
                     lines.append(f"    {cs.command_base:20s} {cs.count:3d}")
             if ta.retry_patterns:
-                lines.append(f"  Retries: {len(ta.retry_patterns)}")
-            if ta.read_write_ratio is not None:
+                lines.append(f"  Multi-call patterns: {len(ta.retry_patterns)}")
+            if ta.read_write_ratio == float("inf"):
+                lines.append("  Read/write ratio: ∞ (reads only)")
+            elif ta.read_write_ratio == 0.0 and ta.read_count == 0 and ta.write_count == 0:
+                lines.append("  Read/write ratio: n/a (no file access)")
+            else:
                 lines.append(f"  Read/write ratio: {ta.read_write_ratio:.2f}")
             if ta.most_common_extensions:
                 ext_strs = [f"{ext}({count})" for ext, count in ta.most_common_extensions[:5]]
@@ -778,7 +785,7 @@ class TrajectoriesReport:
 
         v("Correction Evidence")
         if verbose and self._turns:
-            error_turns = [(t, q) for t, q in zip(self._turns, self._qualities) if t.follow_up_correction]
+            error_turns = [(t, q) for t, q in zip(self._turns, self._qualities) if t.follow_up_correction and not t.is_heartbeat]
             if error_turns:
                 lines.append(f"  All {len(error_turns)} error turns:")
                 error_turns.sort(key=lambda x: x[1])
@@ -795,7 +802,12 @@ class TrajectoriesReport:
                     lines.append(f"    {b.label:10s} (len {b.min_length}-{b.max_length}): n={b.n_turns} qual={b.mean_quality:.3f} complete={b.task_completion_rate:.1%}")
             v("Conversation Evidence")
             if verbose:
-                lengths = sorted([(t.turn_id, t.conversation_length, q) for t, q in zip(self._turns, self._qualities)], key=lambda x: x[1], reverse=True)
+                lengths = sorted(
+                    [(t.turn_id, t.conversation_length, q)
+                     for t, q in zip(self._turns, self._qualities)
+                     if not t.is_heartbeat],
+                    key=lambda x: x[1], reverse=True
+                )
                 lines.append("  Longest turns:")
                 for tid, ln, q in lengths[:10]:
                     lines.append(f"    {tid[:32]:32s} len={ln:3d} q={q:.3f}")
