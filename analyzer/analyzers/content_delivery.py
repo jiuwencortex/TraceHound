@@ -181,8 +181,9 @@ class ContentDeliveryAnalyzer:
         turns: list[TurnRecord],
         qualities: list[float],
     ) -> None:
-        self._turns = [t for t in turns if not t.is_heartbeat]
-        self._qualities = qualities
+        pairs = [(t, q) for t, q in zip(turns, qualities) if not t.is_heartbeat]
+        self._turns = [t for t, _ in pairs]
+        self._qualities = [q for _, q in pairs]
 
     def analyze(self) -> ContentDeliveryResult:
         if not self._turns:

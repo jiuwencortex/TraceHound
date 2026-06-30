@@ -8,9 +8,8 @@ first-class diagnostic signal:
 
 - Distribution: min / median / p90 / max
 - Quality by length bucket: short (1) / medium (2-3) / long (4-5) / very long (6+)
-- Per-component: which components correlate with longer conversations
-- Flags components whose presence consistently inflates conversation length
-  (> 1.5× the global median)
+- Per-signal: which jiuwenswarm signals (tools used, agent mode) correlate with
+  longer conversations — flags those whose presence inflates length > 1.5× global median
 - Separates "long but successful" from "long and failed" so the developer can
   distinguish between complex-but-fine turns and genuinely broken ones.
 """
@@ -113,17 +112,16 @@ def _percentile(sorted_values: list[float], pct: float) -> float:
     return sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac
 
 
-def _iter_components(turn: TurnRecord):
-    for s in turn.skills:
-        yield s, "skill"
-    for m in turn.memory_sections:
-        yield m, "memory"
-    for t in turn.tools:
-        yield t, "tool"
+def _iter_signals(turn: TurnRecord):
+    """Yield (signal_name, signal_type) pairs for jiuwenswarm-relevant context signals."""
+    for tool in turn.tools_called:
+        yield tool, "tool"
+    if turn.agent_mode:
+        yield turn.agent_mode, "mode"
 
 
 class ConversationLengthAnalyzer:
-    """Profile conversation length and its relationship to quality and components."""
+    """Profile conversation length and its relationship to quality and jiuwenswarm signals."""
 
     def __init__(
         self,
@@ -196,10 +194,10 @@ class ConversationLengthAnalyzer:
                 )
             )
 
-        # Per-component median length
+        # Per-signal median length (tools used, agent mode)
         comp_lengths: dict[tuple[str, str], list[int]] = {}
         for turn in self._turns:
-            for name, ctype in _iter_components(turn):
+            for name, ctype in _iter_signals(turn):
                 comp_lengths.setdefault((name, ctype), []).append(turn.conversation_length)
 
         flagged: list[ComponentLengthProfile] = []

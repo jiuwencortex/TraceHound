@@ -405,7 +405,7 @@ class SessionFlowAnalyzer:
             if any(t.agent_mode for t in turns)
             else ""
         )
-        is_heartbeat = all(t.is_heartbeat for t in turns) or any(t.is_heartbeat for t in turns)
+        is_heartbeat = all(t.is_heartbeat for t in turns)
         title = turns[0].session_title if turns else ""
 
         return SessionProfile(

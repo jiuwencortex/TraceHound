@@ -306,7 +306,10 @@ class TrajectoriesReport:
         else:
             lines.append(f"  Total tokens: {tu.total_tokens:,} (in={tu.total_input_tokens:,} out={tu.total_output_tokens:,})")
             lines.append(f"  Per turn: avg={tu.mean_tokens_per_turn:.0f} median={tu.median_tokens_per_turn:.0f} max={tu.max_tokens_per_turn:,}")
-            lines.append(f"  Efficiency: success={tu.mean_tokens_per_success:.0f} failure={tu.mean_tokens_per_failure:.0f} ratio={tu.token_efficiency_ratio:.2f}")
+            if tu.failure_turns > 0:
+                lines.append(f"  Efficiency: success={tu.mean_tokens_per_success:.0f} failure={tu.mean_tokens_per_failure:.0f} ratio={tu.token_efficiency_ratio:.2f}")
+            else:
+                lines.append(f"  Efficiency: success={tu.mean_tokens_per_success:.0f} (no failures)")
             lines.append(f"  Context: avg={tu.mean_usage_percent:.1%} p90={tu.p90_usage_percent:.1%}")
             if tu.turns_near_limit > 0:
                 lines.append(f"  Near-limit turns: {tu.turns_near_limit}")
@@ -403,8 +406,9 @@ class TrajectoriesReport:
         if verbose and uq.longest_queries:
             lines.append("  Longest queries:")
             for q in uq.longest_queries[:3]:
-                preview = q[:80] + "..." if len(q) > 80 else q
-                lines.append(f"    {preview}")
+                text = q["user_query"]
+                preview = text[:80] + "..." if len(text) > 80 else text
+                lines.append(f"    [{q['type']}] len={q['length']} {preview}")
 
         h("Content Delivery")
         lines.append(f"  Response length: min={cd.response_length_min} median={cd.response_length_median:.0f} mean={cd.response_length_mean:.0f} p90={cd.response_length_p90:.0f} max={cd.response_length_max}")

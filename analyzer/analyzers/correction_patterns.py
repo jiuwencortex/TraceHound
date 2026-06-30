@@ -2,12 +2,19 @@
 
 """Correction patterns analyzer.
 
-Identifies components whose presence in context correlates with the user
-issuing a follow-up correction.  Uses a "lift" metric:
+Identifies jiuwenswarm-relevant signals whose presence correlates with the
+user issuing a follow-up correction.  Uses a "lift" metric:
 
-    lift = correction_rate_when_component_present / baseline_correction_rate
+    lift = correction_rate_when_signal_present / baseline_correction_rate
 
-A lift > 1.5 indicates the component is meaningfully associated with corrections.
+A lift > 1.5 indicates the signal is meaningfully associated with corrections.
+
+Signals analysed (all jiuwenswarm-native fields):
+  - ``tools_called``   — which tools were invoked in the turn  (type "tool")
+  - ``agent_mode``     — which mode the session was running in (type "mode")
+  - ``error_category`` — which error category was recorded     (type "error_cat")
+
+Heartbeat turns are excluded.
 """
 
 from __future__ import annotations
@@ -23,7 +30,7 @@ _MIN_TURNS_FOR_FLAG = 5
 @dataclass(frozen=True)
 class CorrectionPattern:
     component: str
-    component_type: str    # "skill" | "memory" | "tool"
+    component_type: str    # "tool" | "mode" | "error_cat"
     correction_rate: float
     baseline_correction_rate: float
     lift: float
@@ -58,17 +65,21 @@ class CorrectionPatternsResult:
         }
 
 
-def _iter_components(turn: TurnRecord):
-    for s in turn.skills:
-        yield s, "skill"
-    for m in turn.memory_sections:
-        yield m, "memory"
-    for t in turn.tools:
-        yield t, "tool"
+def _iter_signals(turn: TurnRecord):
+    """Yield (signal_name, signal_type) pairs for jiuwenswarm-relevant context signals."""
+    # Tools invoked in this turn
+    for tool in turn.tools_called:
+        yield tool, "tool"
+    # Agent mode
+    if turn.agent_mode:
+        yield turn.agent_mode, "mode"
+    # Error category (only meaningful on error turns, but useful for lift calculation)
+    if turn.error_category:
+        yield turn.error_category, "error_cat"
 
 
 class CorrectionPatternsAnalyzer:
-    """Find components strongly associated with follow-up corrections."""
+    """Find jiuwenswarm signals strongly associated with follow-up corrections."""
 
     def __init__(
         self,
@@ -76,7 +87,8 @@ class CorrectionPatternsAnalyzer:
         lift_threshold: float = _DEFAULT_LIFT_THRESHOLD,
         min_turns: int = _MIN_TURNS_FOR_FLAG,
     ) -> None:
-        self._turns = turns
+        # Exclude heartbeat turns — they are not real task interactions
+        self._turns = [t for t in turns if not t.is_heartbeat]
         self._lift_threshold = lift_threshold
         self._min_turns = min_turns
 
@@ -85,30 +97,30 @@ class CorrectionPatternsAnalyzer:
         n_corrected_total = sum(1 for t in self._turns if t.follow_up_correction)
         baseline = n_corrected_total / n_total if n_total else 0.0
 
-        # Per-component counts
-        comp_total: dict[tuple[str, str], int] = {}
-        comp_corrected: dict[tuple[str, str], int] = {}
+        # Per-signal counts
+        sig_total: dict[tuple[str, str], int] = {}
+        sig_corrected: dict[tuple[str, str], int] = {}
 
         for turn in self._turns:
-            for name, ctype in _iter_components(turn):
-                key = (name, ctype)
-                comp_total[key] = comp_total.get(key, 0) + 1
+            for name, stype in _iter_signals(turn):
+                key = (name, stype)
+                sig_total[key] = sig_total.get(key, 0) + 1
                 if turn.follow_up_correction:
-                    comp_corrected[key] = comp_corrected.get(key, 0) + 1
+                    sig_corrected[key] = sig_corrected.get(key, 0) + 1
 
         patterns: list[CorrectionPattern] = []
-        for key, n_included in comp_total.items():
+        for key, n_included in sig_total.items():
             if n_included < self._min_turns:
                 continue
-            n_corr = comp_corrected.get(key, 0)
+            n_corr = sig_corrected.get(key, 0)
             rate = n_corr / n_included
             lift = rate / baseline if baseline > 0 else (1.0 if rate == 0 else float("inf"))
             if lift >= self._lift_threshold:
-                name, ctype = key
+                name, stype = key
                 patterns.append(
                     CorrectionPattern(
                         component=name,
-                        component_type=ctype,
+                        component_type=stype,
                         correction_rate=rate,
                         baseline_correction_rate=baseline,
                         lift=lift,

@@ -170,9 +170,17 @@ TraceHound/
 │   └── analyzers/
 │       ├── data_health.py
 │       ├── quality_trends.py
-│       ├── time_bottlenecks.py
 │       ├── correction_patterns.py
-│       └── conversation_length.py
+│       ├── conversation_length.py
+│       ├── time_bottlenecks.py
+│       ├── token_usage.py
+│       ├── llm_performance.py
+│       ├── tool_success.py
+│       ├── error_categories.py
+│       ├── user_queries.py
+│       ├── session_flow.py
+│       ├── tool_arguments.py
+│       └── content_delivery.py
 │
 └── analyzer_gui/                (NEW package)
     ├── __init__.py              (empty)
@@ -300,7 +308,7 @@ class AnalysisBackend:
         try:
             on_progress("Loading log files...")
             loader = TrajectoriesLoader(
-                log_dir, max_weeks=max_sessions, source_type="auto"
+                log_dir, max_weeks=max_sessions,
             )
             on_progress("Running analyzers...")
             reporter = TrajectoriesReport(
@@ -343,17 +351,21 @@ One-glance summary using `StatCard` widgets in a `CTkScrollableFrame`.
 
 **Stat cards rendered from `ReportResult`:**
 
-| Card label                  | Source                                                       |
-|-----------------------------|--------------------------------------------------------------|
-| Total Turns                 | `result.data_health.total_turns`                            |
-| Date Range                  | `result.data_health.date_range` as "YYYY-MM-DD → YYYY-MM-DD"|
-| Overall Mean Quality        | `result.quality_trends.overall_mean` (colour-coded)         |
-| Trend Direction             | `result.quality_trends.trend_direction` with arrow symbol   |
-| Baseline Correction Rate    | `result.correction_patterns.baseline_correction_rate`       |
-| Sessions / Log Files        | `len(loader.raw_sessions)` or `len(dh.log_files_found)`     |
-| Median Turn Duration        | `result.time_bottlenecks.median_duration_s` (if > 0)        |
+| Card label                  | Source                                                            |
+|-----------------------------|-------------------------------------------------------------------|
+| Total Turns                 | `result.data_health.total_turns`                                 |
+| Date Range                  | `result.data_health.date_range` as "YYYY-MM-DD → YYYY-MM-DD"    |
+| Overall Mean Quality        | `result.quality_trends.overall_mean` (colour-coded)              |
+| Trend Direction             | `result.quality_trends.trend_direction` with arrow symbol        |
+| Baseline Correction Rate    | `result.correction_patterns.baseline_correction_rate`            |
+| Sessions (real / heartbeat) | `result.session_flow.total_real_sessions / total_heartbeat_sessions` |
+| Median Turn Duration        | `result.time_bottlenecks.median_duration_s` (if > 0)            |
+| Overall Error Rate          | `result.error_categories.overall_error_rate`                     |
+| Estimated Cost              | `result.token_usage.estimated_total_cost` formatted as "$X.XXXX" |
+| Productive Session Rate     | `result.session_flow.productive_session_rate`                    |
 
 Colour coding for Overall Mean Quality: green frame (> 0.70), yellow (0.50–0.70), red (< 0.50).
+Colour coding for Overall Error Rate: green (< 0.10), yellow (0.10–0.30), red (> 0.30).
 
 Below the cards: a `CTkTextbox` (read-only, height=15) showing the first 80 lines of
 `report.render_text(result)` for quick text-mode reference.
@@ -438,7 +450,70 @@ Turn groups are built by grouping `raw_sessions[path]` by `request_id`, mirrorin
 **Lazy loading:** only the first 50 turns are rendered immediately. A "Load more..." `CTkButton`
 appends the next 50 on each click, preventing widget overload for sessions with 200+ turns.
 
-### 6.6 SettingsView (`views/settings_view.py`)
+### 6.6 ErrorsView (`views/errors_view.py`)
+
+Covers `result.error_categories` and `result.user_queries`.
+
+**Layout:** `CTkTabview` with three tabs.
+
+**Tab "Error Breakdown":**
+- `SortableTable`: Columns `Category`, `Count`, `% of Errors`, `Affected Sessions`.
+  Data: `result.error_categories.categories` (all 9 known categories; zeros still shown).
+- Below: two `StatCard` widgets — Overall Error Rate, Recovery Rate.
+- `CTkLabel` for persistent error categories.
+
+**Tab "Weekly Errors":**
+- `MplFrame` bar chart. X axis: week tags. Y axis: error count.
+  Bars colour-coded red. Secondary line (twin axis) shows total turn count.
+  Data: `result.error_categories.weekly_summaries`.
+
+**Tab "User Queries":**
+- Row of `StatCard` widgets: min length / median / mean / p90 / max.
+- `SortableTable`: Columns `Type`, `Count`, `Mean Quality`, `Mean Duration (s)`, `Mean Tokens`.
+  Data: `result.user_queries.query_type_distribution`.
+- `CTkLabel` for most common type, best quality type, most tool-heavy type.
+- Two `StatCard` widgets: Length vs Duration correlation, Length vs Tokens correlation.
+
+### 6.7 TokensView (`views/tokens_view.py`)
+
+Covers `result.token_usage`, `result.llm_performance`, `result.tool_success`,
+and `result.content_delivery`.
+
+**Layout:** `CTkTabview` with four tabs.
+
+**Tab "Token Usage":**
+- Row of `StatCard` widgets: Total Tokens, Mean/Turn, Context avg %, Near-limit Turns, Est. Cost.
+- `SortableTable`: per-model breakdown.
+  Columns: `Model`, `Turns`, `Total Tokens`, `Avg Tokens`, `Avg Context %`, `Est. Cost`.
+  Data: `result.token_usage.model_summary`.
+- `MplFrame` bar chart of weekly total tokens.
+  Data: `result.token_usage.weekly_summary`.
+
+**Tab "LLM Latency":**
+- Row of `StatCard` widgets: Median Latency, p90 Latency, Throughput (tok/s).
+- `SortableTable`: slowest turns.
+  Columns: `Turn ID`, `Latency (ms)`, `TTFT (ms)`, `TPOT (ms)`, `Model`, `Status`.
+  Data: `result.llm_performance.slowest_turns`.
+- `MplFrame` line chart of weekly mean latency with p90 shading.
+  Data: `result.llm_performance.weekly_summaries`.
+
+**Tab "Tool Success":**
+- Row of `StatCard` widgets: Total Calls, Total Failures, Overall Success Rate, Recovery Rate.
+- `SortableTable`: per-tool stats, sorted by failure rate descending.
+  Columns: `Tool`, `Calls`, `Successes`, `Failures`, `Success Rate`, `Avg Duration (s)`.
+  Rows with `success_rate < 0.80` highlighted red.
+  Data: `result.tool_success.per_tool_stats`.
+- `CTkLabel` for top error messages.
+
+**Tab "Content Delivery":**
+- Row of `StatCard` widgets: Productive Rate, Files Delivered, Silent Successes, Tool-to-Content Rate.
+- `SortableTable`: response bucket breakdown.
+  Columns: `Bucket`, `Char Range`, `Turns`, `Mean Quality`.
+  Data: `result.content_delivery.response_buckets`.
+- `MplFrame` bar chart of weekly average response length.
+  Data: `result.content_delivery.weekly_summaries`.
+
+### 6.8 SettingsView (`views/settings_view.py`)
 
 Exposes the two threshold parameters from `TrajectoriesReport.__init__()` as interactive
 controls for live re-analysis without the CLI.
@@ -482,8 +557,10 @@ Launch
 | Overview     | `OverviewView`       | Ctrl+1            |
 | Quality      | `QualityView`        | Ctrl+2            |
 | Timing       | `TimingView`         | Ctrl+3            |
-| Sessions     | `SessionsView`       | Ctrl+4            |
-| Settings     | `SettingsView`       | Ctrl+5            |
+| Errors       | `ErrorsView`         | Ctrl+4            |
+| Tokens & LLM | `TokensView`         | Ctrl+5            |
+| Sessions     | `SessionsView`       | Ctrl+6            |
+| Settings     | `SettingsView`       | Ctrl+7            |
 
 All nav buttons except "Load" are `state="disabled"` until `on_result_ready()` fires.
 
@@ -503,7 +580,7 @@ The GUI does not modify any file under `analyzer/`. It reuses the pipeline as a 
 from analyzer.loader import TrajectoriesLoader
 from analyzer.report import TrajectoriesReport
 
-loader = TrajectoriesLoader(log_dir, max_sessions=max_sessions, source_type="auto")
+loader = TrajectoriesLoader(log_dir, max_weeks=max_sessions)
 reporter = TrajectoriesReport(
     loader,
     quality_deficit_threshold=qd_thresh,
@@ -650,7 +727,19 @@ Files to create:
 Acceptance test: clicking a session ID populates the right panel. Clicking a turn header expands
 it. "Load more..." appends 50 turns. No crash on sessions with 200+ turns.
 
-### Phase 6: Settings View + Export
+### Phase 6: Errors View + Tokens & LLM View
+
+**Goal:** expose the 8 new analyzers (ErrorCategories, UserQueries, TokenUsage,
+LLMPerformance, ToolSuccess, ContentDelivery) through two tabbed views.
+
+Files to create:
+- `analyzer_gui/views/errors_view.py`
+- `analyzer_gui/views/tokens_view.py`
+
+Acceptance test: Errors tab shows correct category counts and weekly bar chart.
+Tokens tab shows model breakdown and slowest-turn table. No crashes on empty data.
+
+### Phase 7: Settings View + Export
 
 **Goal:** sliders adjust thresholds; "Re-Run" triggers a new analysis; export buttons work.
 
@@ -660,7 +749,7 @@ Files to create:
 Acceptance test: move `quality_deficit_threshold` from 0.15 to 0.30, click Re-Run — analysis updates.
 "Export JSON" saves a valid JSON file matching the CLI `--format json` output.
 
-### Phase 7: Polish + Cross-Platform Testing
+### Phase 8: Polish + Cross-Platform Testing
 
 - Test on Windows 11 Python 3.12 official installer.
 - Test on macOS 14 Intel and ARM with Python 3.12.
@@ -676,7 +765,7 @@ Acceptance test: move `quality_deficit_threshold` from 0.15 to 0.30, click Re-Ru
 |--------------------------------|----------------|-----------------------------------------------|
 | `CTkFrame`                     | customtkinter  | All views (base layout container)             |
 | `CTkScrollableFrame`           | customtkinter  | OverviewView, SessionsView                    |
-| `CTkTabview`                   | customtkinter  | TimingView                                    |
+| `CTkTabview`                   | customtkinter  | TimingView, ErrorsView, TokensView            |
 | `CTkButton`                    | customtkinter  | Nav rail, Browse, Run, Export                 |
 | `CTkLabel`                     | customtkinter  | All views (static text)                       |
 | `CTkEntry`                     | customtkinter  | LoadView dir input, SettingsView sessions     |
@@ -762,6 +851,8 @@ analyzer_gui/views/load_view.py
 analyzer_gui/views/overview_view.py
 analyzer_gui/views/quality_view.py
 analyzer_gui/views/timing_view.py
+analyzer_gui/views/errors_view.py
+analyzer_gui/views/tokens_view.py
 analyzer_gui/views/sessions_view.py
 analyzer_gui/views/settings_view.py
 analyzer_gui/widgets/__init__.py
@@ -770,7 +861,7 @@ analyzer_gui/widgets/sortable_table.py
 analyzer_gui/widgets/mpl_frame.py
 ```
 
-**15 new files. Zero changes to files under `analyzer/`.**
+**18 new files. Zero changes to files under `analyzer/`.**
 
 New entry point: `python -m analyzer_gui [--log-dir PATH] [--max-sessions N]`
 
