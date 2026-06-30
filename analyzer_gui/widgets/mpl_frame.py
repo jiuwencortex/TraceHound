@@ -41,8 +41,8 @@ class MplFrame(ctk.CTkFrame):
         with plt.style.context(_dark_style()):
             self._fig = Figure(figsize=figsize, tight_layout=True)
 
-        self._canvas = FigureCanvasTkAgg(self._fig, master=self)
-        self._canvas.get_tk_widget().pack(fill="both", expand=True)
+        self._mpl_canvas = FigureCanvasTkAgg(self._fig, master=self)
+        self._mpl_canvas.get_tk_widget().pack(fill="both", expand=True)
 
     # ------------------------------------------------------------------
     # Public API
@@ -67,7 +67,7 @@ class MplFrame(ctk.CTkFrame):
 
     def draw(self) -> None:
         """Flush pending draw commands to the Tk canvas."""
-        self._canvas.draw_idle()
+        self._mpl_canvas.draw_idle()
 
     def redraw(self, draw_func) -> None:
         """Clear the figure, call ``draw_func(fig)`` to populate, then flush.
@@ -78,4 +78,4 @@ class MplFrame(ctk.CTkFrame):
         """
         self._fig.clear()
         draw_func(self._fig)
-        self._canvas.draw_idle()
+        self._mpl_canvas.draw_idle()

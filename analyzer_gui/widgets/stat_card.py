@@ -56,7 +56,7 @@ class StatCard(ctk.CTkFrame):
     def update(self, value: str, color_key: str = COLOR_NEUTRAL) -> None:
         """Update the displayed value and optionally the card's accent colour."""
         self._value_lbl.configure(text=value)
-        if color_key == COLOR_NEUTRAL:
+        if not color_key or color_key == COLOR_NEUTRAL:
             # Reset to theme default
             self.configure(fg_color=("gray86", "gray17"))
         else:

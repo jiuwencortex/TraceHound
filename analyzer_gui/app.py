@@ -225,8 +225,8 @@ class TraceHoundApp(ctk.CTk):
         self._load_view.set_status("Analysis complete.")
         self._enable_analysis_nav()
 
-        # Refresh all views
-        for view in self._views:
+        # Refresh analysis views (skip LoadView at index 0)
+        for view in self._views[1:]:
             view.refresh(result, loader, reporter)
 
         # Navigate to Overview automatically
