@@ -489,7 +489,7 @@ class TrajectoriesReport:
                 for cs in ta.command_stats[:5]:
                     lines.append(f"    {cs.command_base:20s} {cs.count:3d}")
             if ta.retry_patterns:
-                lines.append(f"  Retries: {len(ta.retry_patterns)}")
+                lines.append(f"  Multi-call patterns: {len(ta.retry_patterns)}")
             if ta.read_write_ratio == float("inf"):
                 lines.append("  Read/write ratio: ∞ (reads only)")
             elif ta.read_write_ratio == 0.0 and ta.read_count == 0 and ta.write_count == 0:
