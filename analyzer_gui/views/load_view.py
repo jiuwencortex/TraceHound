@@ -116,6 +116,10 @@ class LoadView(ctk.CTkFrame):
         except ValueError:
             return 30
 
+    def refresh(self, result, loader, reporter) -> None:
+        """No-op: LoadView does not display analysis results."""
+        pass
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------

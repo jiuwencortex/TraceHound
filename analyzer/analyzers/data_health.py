@@ -57,7 +57,7 @@ class DataHealthAnalyzer:
         skipped_records: int = 0,
         log_files: list[Path] | None = None,
     ) -> None:
-        self._turns = turns
+        self._turns = [t for t in turns if not t.is_heartbeat]
         self._skipped = skipped_records
         self._log_files = log_files or []
 

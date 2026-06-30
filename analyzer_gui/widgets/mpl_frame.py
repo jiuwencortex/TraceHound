@@ -38,10 +38,17 @@ class MplFrame(ctk.CTkFrame):
     ) -> None:
         super().__init__(parent, **kwargs)
 
+        # Prevent FigureCanvasTkAgg from clobbering CTkFrame's internal _canvas.
+        _orig_canvas = getattr(self, "_canvas", None)
+
         with plt.style.context(_dark_style()):
             self._fig = Figure(figsize=figsize, tight_layout=True)
 
         self._mpl_canvas = FigureCanvasTkAgg(self._fig, master=self)
+        # Restore CTkFrame's canvas reference if it was overwritten.
+        if _orig_canvas is not None:
+            object.__setattr__(self, "_canvas", _orig_canvas)
+
         self._mpl_canvas.get_tk_widget().pack(fill="both", expand=True)
 
     # ------------------------------------------------------------------

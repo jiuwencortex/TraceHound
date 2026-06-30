@@ -72,8 +72,9 @@ class QualityTrendsAnalyzer:
     """Compute per-week quality statistics and detect trend direction."""
 
     def __init__(self, turns: list[TurnRecord], qualities: list[float]) -> None:
-        self._turns = turns
-        self._qualities = qualities
+        pairs = [(t, q) for t, q in zip(turns, qualities) if not t.is_heartbeat]
+        self._turns = [t for t, _ in pairs]
+        self._qualities = [q for _, q in pairs]
 
     def analyze(self) -> QualityTrendsResult:
         # Group by week_tag (preserve insertion order = chronological because turns

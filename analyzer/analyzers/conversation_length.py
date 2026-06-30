@@ -130,8 +130,8 @@ class ConversationLengthAnalyzer:
         long_conv_multiplier: float = _LONG_CONV_MULTIPLIER,
         min_turns: int = _MIN_TURNS_FOR_COMPONENT,
     ) -> None:
-        self._turns = turns
-        self._qualities = qualities
+        self._turns = [t for t in turns if not t.is_heartbeat]
+        self._qualities = [q for t, q in zip(turns, qualities) if not t.is_heartbeat]
         self._long_multiplier = long_conv_multiplier
         self._min_turns = min_turns
 
