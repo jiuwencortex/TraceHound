@@ -64,6 +64,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write report to FILE instead of stdout.",
     )
     parser.add_argument(
+        "--desktop",
+        action="store_true",
+        help="Generate a Desktop-style analysis report (saved to ~/Desktop/analysis.md). Overrides --output and --format.",
+    )
+    parser.add_argument(
         "--threshold-lift",
         type=float,
         default=1.5,
@@ -92,6 +97,14 @@ def main() -> None:
     )
 
     result = reporter.run()
+
+    if args.desktop:
+        # Desktop mode: generate structured analysis report
+        desktop_path = Path.home() / "Desktop" / "analysis.md"
+        output_text = reporter.render_desktop(result)
+        desktop_path.write_text(output_text, encoding="utf-8")
+        logger.info("trajectories_analyzer: Desktop report written to {}", desktop_path)
+        return
 
     if args.format == "json":
         output_text = reporter.render_json(result)
