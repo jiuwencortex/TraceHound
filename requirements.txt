@@ -1,1 +1,5 @@
 loguru
+
+# GUI dependencies (analyzer_gui)
+customtkinter>=5.2.2
+matplotlib>=3.9.0
