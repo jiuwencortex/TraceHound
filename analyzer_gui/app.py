@@ -11,6 +11,7 @@ from typing import Optional
 import customtkinter as ctk
 
 from analyzer_gui.backend import AnalysisBackend
+from analyzer_gui.views.desktop_report_view import DesktopReportView
 from analyzer_gui.views.errors_view import ErrorsView
 from analyzer_gui.views.load_view import LoadView
 from analyzer_gui.views.overview_view import OverviewView
@@ -35,7 +36,8 @@ _NAV_ENTRIES = [
     ("Errors",       "Ctrl+4", 4),
     ("Tokens & LLM", "Ctrl+5", 5),
     ("Sessions",     "Ctrl+6", 6),
-    ("Settings",     "Ctrl+7", 7),
+    ("Desktop Rpt",  "Ctrl+7", 7),
+    ("Settings",     "Ctrl+8", 8),
 ]
 
 
@@ -102,6 +104,7 @@ class TraceHoundApp(ctk.CTk):
         self._errors       = ErrorsView(self._content)
         self._tokens       = TokensView(self._content)
         self._sessions     = SessionsView(self._content)
+        self._desktop_rpt  = DesktopReportView(self._content)
         self._settings     = SettingsView(self._content)
 
         self._views = [
@@ -112,6 +115,7 @@ class TraceHoundApp(ctk.CTk):
             self._errors,
             self._tokens,
             self._sessions,
+            self._desktop_rpt,
             self._settings,
         ]
 
@@ -134,7 +138,7 @@ class TraceHoundApp(ctk.CTk):
             self._settings.set_max_weeks(initial_max_sessions)
 
         # Keyboard shortcuts
-        for i in range(8):
+        for i in range(9):
             self.bind(f"<Control-Key-{i}>", lambda e, n=i: self._show_view(n))
 
     # ------------------------------------------------------------------
