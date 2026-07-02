@@ -33,6 +33,7 @@ class AnalysisBackend:
         on_progress: Callable[[str], None],
         on_complete: Callable,
         on_error: Callable[[Exception], None],
+        skip_heartbeats: bool = True,
     ) -> None:
         """Start analysis in a background thread.
 
@@ -55,6 +56,7 @@ class AnalysisBackend:
                 max_weeks,
                 quality_deficit_threshold,
                 correction_lift_threshold,
+                skip_heartbeats,
                 on_progress,
                 on_complete,
                 on_error,
@@ -69,6 +71,7 @@ class AnalysisBackend:
         max_weeks: int,
         qd_thresh: float,
         lift_thresh: float,
+        skip_heartbeats: bool,
         on_progress: Callable,
         on_complete: Callable,
         on_error: Callable,
@@ -78,7 +81,9 @@ class AnalysisBackend:
             from analyzer.report import TrajectoriesReport
 
             on_progress("Loading log files...")
-            loader = TrajectoriesLoader(log_dir, max_weeks=max_weeks)
+            loader = TrajectoriesLoader(
+                log_dir, max_weeks=max_weeks, skip_heartbeats=skip_heartbeats
+            )
 
             on_progress("Running analyzers...")
             reporter = TrajectoriesReport(

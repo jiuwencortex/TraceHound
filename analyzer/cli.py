@@ -69,6 +69,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Generate a Desktop-style analysis report (saved to ~/Desktop/analysis.md). Overrides --output and --format.",
     )
     parser.add_argument(
+        "--include-heartbeats",
+        action="store_true",
+        help="Include heartbeat sessions in the analysis (default: excluded).",
+    )
+    parser.add_argument(
         "--threshold-lift",
         type=float,
         default=1.5,
@@ -90,6 +95,7 @@ def main() -> None:
     loader = TrajectoriesLoader(
         log_dir,
         max_weeks=args.max_weeks,
+        skip_heartbeats=not args.include_heartbeats,
     )
     reporter = TrajectoriesReport(
         loader,

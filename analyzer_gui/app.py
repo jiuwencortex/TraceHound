@@ -203,6 +203,7 @@ class TraceHoundApp(ctk.CTk):
         max_weeks: int,
         qd_thresh: float,
         lift_thresh: float,
+        skip_heartbeats: bool = True,
     ) -> None:
         if self._backend.is_running():
             return
@@ -215,6 +216,7 @@ class TraceHoundApp(ctk.CTk):
             max_weeks=max_weeks,
             quality_deficit_threshold=qd_thresh,
             correction_lift_threshold=lift_thresh,
+            skip_heartbeats=skip_heartbeats,
             on_progress=lambda msg: self.after(0, self._load_view.set_status, msg),
             on_complete=lambda r, lo, rp: self.after(0, self._on_complete, r, lo, rp),
             on_error=lambda exc: self.after(0, self._on_error, exc),

@@ -449,9 +449,11 @@ class TrajectoriesLoader:
         self,
         log_dir: str | Path,
         max_weeks: int = 8,
+        skip_heartbeats: bool = True,
     ) -> None:
         self._log_dir = Path(log_dir)
         self._max_weeks = max_weeks
+        self._skip_heartbeats = skip_heartbeats
         self._skipped: int = 0
         self._raw_sessions: dict[Path, list[dict]] = {}
         self._tool_call_timings: list[ToolCallTiming] = []
@@ -479,8 +481,12 @@ class TrajectoriesLoader:
         if sessions_dir.is_dir():
             for sub in sessions_dir.iterdir():
                 hist = sub / "history.jsonl"
-                if hist.exists():
-                    paths.append(hist)
+                if not hist.exists():
+                    continue
+                # Skip heartbeat sessions by directory name heuristic
+                if self._skip_heartbeats and sub.name.lower().startswith("heartbeat"):
+                    continue
+                paths.append(hist)
 
         paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return paths[: self._max_weeks]
@@ -529,9 +535,13 @@ class TrajectoriesLoader:
                 )
                 if record is None:
                     self._skipped += 1
-                else:
-                    records.append(record)
-                    self._tool_call_timings.extend(tool_timings)
+                    continue
+                # Safety-net: skip heartbeat turns even if session dir wasn't caught
+                if self._skip_heartbeats and record.is_heartbeat:
+                    self._skipped += 1
+                    continue
+                records.append(record)
+                self._tool_call_timings.extend(tool_timings)
 
             self._raw_sessions[path] = [
                 raw
