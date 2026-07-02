@@ -34,6 +34,7 @@ alerts:
   correction_loop: true
   cost_threshold: true
   no_data: true
+  session_dead: true
   thresholds:
     quality_drop_delta: 0.15
     quality_drop_window_turns: 5
@@ -50,6 +51,7 @@ alerts:
     correction_loop_window_turns: 15
     cost_daily_budget_usd: 5.00
     no_data_hours: 4.0
+    session_dead_hours: 2.0
 
 actions:
   markdown_files: true

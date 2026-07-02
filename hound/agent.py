@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
@@ -28,7 +29,7 @@ from .memory.baseline_store import BaselineStore
 from .memory.db import Database
 from .memory.offset_store import IngestionOffsetStore
 from .memory.snapshot_store import SnapshotStore
-from .schedule.jobs import run_full_analysis
+from .schedule.jobs import run_full_analysis, write_session_summary
 from .schedule.scheduler import ReportScheduler
 from .watch.watcher import WatchAgent
 
@@ -84,7 +85,7 @@ class HoundAgent:
         self._actions = ActionExecutor(handlers)
 
         # --- Alerts ---
-        rules = build_rules(config, self._alert_store)
+        rules = build_rules(config, self._alert_store, self._offsets)
         self._alert_engine = AlertEngine(
             rules=rules,
             alert_store=self._alert_store,
@@ -111,6 +112,10 @@ class HoundAgent:
         # Internal counters
         self._turns_since_snapshot = 0
         self._snapshot_interval = 25
+
+        # Session-end detection: session_id → (last_seen_utc, accumulated_turns)
+        self._session_last_seen: dict[str, tuple[datetime, list]] = {}
+        self._session_summarised: set[str] = set()
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -158,6 +163,7 @@ class HoundAgent:
             except asyncio.TimeoutError:
                 # Periodic: evaluate rules even without new data (for no_data rule)
                 self._alert_engine.evaluate(self._analyzer.state)
+                self._check_session_ends()
 
     # ------------------------------------------------------------------
     # Turn processing
@@ -167,6 +173,15 @@ class HoundAgent:
         """Called from TurnIngester when new turns are parsed (may be in thread)."""
         self._analyzer.ingest(turns)
         state = self._analyzer.state
+
+        # Track per-session activity for session-end detection
+        now = datetime.now(tz=timezone.utc)
+        for turn in turns:
+            sid = turn.session_id or "unknown"
+            prev_last, prev_turns = self._session_last_seen.get(sid, (now, []))
+            self._session_last_seen[sid] = (now, prev_turns + [turn])
+            # If a session gets new turns, reset its "summarised" flag
+            self._session_summarised.discard(sid)
 
         # Evaluate alert rules
         self._alert_engine.evaluate(state)
@@ -185,6 +200,32 @@ class HoundAgent:
                     self._feedback.write(state)
                 except Exception:  # noqa: BLE001
                     pass
+
+    def _check_session_ends(self) -> None:
+        """Detect sessions that have gone idle and write their summary."""
+        if not self._cfg.schedule.on_session_end:
+            return
+        idle_threshold_s = self._cfg.schedule.session_end_idle_minutes * 60
+        now = datetime.now(tz=timezone.utc)
+        for sid, (last_seen, turns) in list(self._session_last_seen.items()):
+            if sid in self._session_summarised:
+                continue
+            elapsed_s = (now - last_seen).total_seconds()
+            if elapsed_s >= idle_threshold_s:
+                self._session_summarised.add(sid)
+                # Find the file path for this session
+                file_path = None
+                for s in self._offsets.all_sessions():
+                    if s["session_id"] == sid:
+                        from pathlib import Path as _Path
+                        file_path = _Path(s["file_path"])
+                        break
+                if file_path:
+                    try:
+                        write_session_summary(file_path, turns, reporter=None)
+                        logger.info("hound: session-end summary written for {}", sid[:24])
+                    except Exception:  # noqa: BLE001
+                        pass
 
     def _on_alert(self, alert) -> None:
         """Called by AlertEngine when a new alert fires."""

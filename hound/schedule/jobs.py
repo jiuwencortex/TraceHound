@@ -38,6 +38,8 @@ def run_full_analysis(
                 baseline_store.set("quality_mean", sum(means) / len(means))
         baseline_store.set("error_rate", result.error_categories.overall_error_rate)
         baseline_store.set("mean_tokens", result.token_usage.mean_tokens_per_turn)
+        if result.llm_performance.total_latency.median > 0:
+            baseline_store.set("median_latency_ms", result.llm_performance.total_latency.median)
 
         # Write text summary
         now = datetime.now(tz=timezone.utc)

@@ -39,6 +39,7 @@ class AlertThresholds:
     correction_loop_window_turns: int = 15
     cost_daily_budget_usd: float = 5.00
     no_data_hours: float = 4.0
+    session_dead_hours: float = 2.0
 
 
 @dataclass
@@ -54,6 +55,7 @@ class AlertRulesConfig:
     correction_loop: bool = True
     cost_threshold: bool = True
     no_data: bool = True
+    session_dead: bool = True
     thresholds: AlertThresholds = field(default_factory=AlertThresholds)
 
 

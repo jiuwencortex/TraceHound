@@ -81,6 +81,7 @@ def load_config(path: Path | None = None) -> AgentConfig:
         correction_loop_window_turns=int(thr_raw.get("correction_loop_window_turns", 15)),
         cost_daily_budget_usd=float(thr_raw.get("cost_daily_budget_usd", 5.00)),
         no_data_hours=float(thr_raw.get("no_data_hours", 4.0)),
+        session_dead_hours=float(thr_raw.get("session_dead_hours", 2.0)),
     )
     alerts = AlertRulesConfig(
         quality_drop=bool(al.get("quality_drop", True)),
@@ -94,6 +95,7 @@ def load_config(path: Path | None = None) -> AgentConfig:
         correction_loop=bool(al.get("correction_loop", True)),
         cost_threshold=bool(al.get("cost_threshold", True)),
         no_data=bool(al.get("no_data", True)),
+        session_dead=bool(al.get("session_dead", True)),
         thresholds=thresholds,
     )
 
