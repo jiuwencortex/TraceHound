@@ -3,3 +3,15 @@ loguru
 # GUI dependencies (analyzer_gui)
 customtkinter>=5.2.2
 matplotlib>=3.9.0
+
+# TraceHound Hound Agent — additional dependencies
+# Install with: pip install -r requirements-agent.txt
+
+# Filesystem event monitoring (cross-platform)
+watchdog>=4.0.0
+
+# YAML config file parsing
+pyyaml>=6.0
+
+# Logging (shared with core analyzer)
+loguru
