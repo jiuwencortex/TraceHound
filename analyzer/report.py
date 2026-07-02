@@ -192,14 +192,17 @@ class TrajectoriesReport:
         )
 
     def render_desktop(self, result: ReportResult) -> str:
-        r"""Generate a Desktop-style analysis report in Markdown.
+        r"""Generate a jiuwenswarm-focused qualitative analysis report in Markdown.
 
-        Matches the format of C:\Users\d00408138\Desktop\analysis.md with:
-        - Executive Summary
-        - Numbered issue sections with Description, Evidence, Impact, Root Cause, Recommendations
-        - Summary Time Breakdown table
-        - Recommended Fixes (Priority Order) table
-        - Appendix
+        Uses data-driven issue detection with narratives that match actual
+        jiuwenswarm agent behaviour:
+
+        - API auth / billing failures
+        - Token burn / context bloat
+        - Tool misconfiguration
+        - LLM latency bottlenecks
+        - Error cascades & poor recovery
+        - Import / syntax regressions
         """
         lines: list[str] = []
 
@@ -208,168 +211,346 @@ class TrajectoriesReport:
 
         dh = result.data_health
         qt = result.quality_trends
-        crp = result.correction_patterns
         cl = result.conversation_length
         tb = result.time_bottlenecks
         tu = result.token_usage
         lp = result.llm_performance
         ts = result.tool_success
         ec = result.error_categories
-        uq = result.user_queries
         sf = result.session_flow
-        ta = result.tool_arguments
-        cd = result.content_delivery
 
-        # --- Header ---
+        # ------------------------------------------------------------------
+        # Gather metrics for dynamic issue detection
+        # ------------------------------------------------------------------
+        total_turns = dh.total_turns
+        total_sessions = sf.total_sessions
+        error_rate = ec.overall_error_rate
+        mean_quality = qt.overall_mean
         n_issues = 0
         issues: list[dict] = []
 
-        # Gather data for issue detection
-        total_turns = dh.total_turns
-        real_sessions = sf.total_real_sessions
-        error_rate = ec.overall_error_rate
-        mean_quality = qt.overall_mean
+        # Per-category error counts (safe getattr)
+        def _cat_count(name: str) -> int:
+            for c in getattr(ec, "categories", []):
+                if getattr(c, "category", "") == name:
+                    return getattr(c, "count", 0)
+            return 0
 
-        # Issue 1: Excessive confirmation loops (detected via conversation length patterns)
-        avg_conv_len = cl.mean_length if hasattr(cl, 'mean_length') else 0.0
-        max_conv_len = cl.max_length if hasattr(cl, 'max_length') else 0
-        long_turns_ratio = (cl.n_long_successful + cl.n_long_failed) / max(total_turns, 1)
+        api_auth_count = _cat_count("api_auth")
+        import_count = _cat_count("import")
+        syntax_count = _cat_count("syntax")
+        timeout_count = _cat_count("timeout")
+        model_count = _cat_count("model")
+        fs_count = _cat_count("filesystem")
+        exec_count = _cat_count("execution")
+        network_count = _cat_count("network")
 
-        # Issue 2: Redundant research (detected via token usage)
-        has_token_data = tu.total_tokens > 0
-        mean_tokens = tu.mean_tokens_per_turn if hasattr(tu, 'mean_tokens_per_turn') else 0
+        # Worst-performing tool
+        worst_tool = None
+        worst_rate = 1.0
+        for pts in getattr(ts, "per_tool_stats", []):
+            rate = getattr(pts, "success_rate", 1.0)
+            if rate < worst_rate:
+                worst_rate = rate
+                worst_tool = pts
 
-        # Issue 3: Network/API failures
-        network_errors = sum(1 for cat in ec.categories if cat.category == "network" for _ in [cat]) if hasattr(ec, 'categories') else 0
-        api_errors = sum(1 for cat in ec.categories if cat.category == "api_auth" for _ in [cat]) if hasattr(ec, 'categories') else 0
-        total_error_turns = ec.error_turns
+        # Slowest model
+        slowest_model = None
+        slowest_lat = 0.0
+        for ms in getattr(lp, "model_summaries", []):
+            lat = getattr(getattr(ms, "total_latency", None), "mean", 0.0)
+            if lat > slowest_lat:
+                slowest_lat = lat
+                slowest_model = ms
 
-        # Issue 4: Tool failures / SVG escaping (filesystem + execution errors)
-        fs_errors = sum(1 for cat in ec.categories if cat.category == "filesystem" for _ in [cat]) if hasattr(ec, 'categories') else 0
-        exec_errors = sum(1 for cat in ec.categories if cat.category == "execution" for _ in [cat]) if hasattr(ec, 'categories') else 0
-        tool_failures = sum(1 for cat in ec.categories if cat.category == "import" for _ in [cat]) if hasattr(ec, 'categories') else 0
-
-        # Issue 5: History bloat
-        total_sessions = sf.total_sessions
-        avg_turns_per_session = sf.session_size_distribution.get("mean", 0) if hasattr(sf, 'session_size_distribution') else 0
-
-        # Build issues dynamically based on detected patterns
-        # Issue 1: Confirmation Loops
-        if long_turns_ratio > 0.1 or max_conv_len > 50:
+        # ------------------------------------------------------------------
+        # Issue 1: API Authentication / Billing Failures
+        # ------------------------------------------------------------------
+        if api_auth_count > 0:
             n_issues += 1
             issues.append({
                 "id": n_issues,
-                "title": "Excessive User Confirmation Loops",
-                "description": "The system repeatedly asks for user approval at multiple pipeline stages even when the user provides clear initial instructions.",
-                "evidence": f"Long conversations detected: max_length={max_conv_len}, avg_length={avg_conv_len:.1f}. {total_turns} total turns across {real_sessions} sessions.",
-                "impact": f"Long conversation chains suggest repeated confirmation rounds. {cl.n_long_failed} long turns failed vs {cl.n_long_successful} successful.",
-                "root_cause": "Rigid stage-gate pipeline where every stage requires explicit user approval, even for trivial decisions already specified.",
+                "title": "API Authentication & Billing Failures",
+                "description": (
+                    "The agent repeatedly fails to call the LLM API due to "
+                    "authentication or payment errors (401/402). This is the "
+                    "single largest source of failures in the dataset."
+                ),
+                "evidence": (
+                    f"{api_auth_count}/{ec.error_turns} error turns are API-auth "
+                    f"related ({api_auth_count / max(ec.error_turns, 1):.0%} of all errors). "
+                    f"Overall error rate: {error_rate:.1%}."
+                ),
+                "impact": (
+                    f"Every auth failure wastes the full turn duration and burns "
+                    f"input tokens with zero output. Recovery rate: {ec.recovery_rate:.1%}."
+                ),
+                "root_cause": (
+                    "API key expired, insufficient balance, or credentials not "
+                    "refreshed. The error propagates immediately without retry."
+                ),
                 "recommendations": [
-                    "Implement context-aware approval skipping: if user provides all required parameters in initial prompt, skip requirement-collection stage.",
-                    "Add 'auto-approve' flag when user says 'skip all next questions' or similar.",
-                    "Respect user intent: if page count and style are specified upfront, do not re-confirm.",
+                    "Set up API key health-check heartbeat: validate key + balance before each run.",
+                    "Add automatic key rotation or fallback to a secondary provider on 401/402.",
+                    "Surface auth errors to the operator immediately (e.g. Slack/Teams alert) instead of silently failing.",
+                    "Pre-flight token budget check: estimate needed tokens and refuse the turn if balance is insufficient.",
                 ],
                 "severity": "Critical",
             })
 
-        # Issue 2: Redundant Research
-        if has_token_data and mean_tokens > 10000:
+        # ------------------------------------------------------------------
+        # Issue 2: Excessive Token Consumption (Context Bloat)
+        # ------------------------------------------------------------------
+        max_tokens = getattr(tu, "max_tokens_per_turn", 0)
+        mean_tokens = getattr(tu, "mean_tokens_per_turn", 0)
+        total_tokens = getattr(tu, "total_tokens", 0)
+        total_cost = getattr(tu, "estimated_total_cost", 0.0)
+        near_limit = getattr(tu, "turns_near_limit", 0)
+
+        if total_tokens > 500_000 or max_tokens > 100_000 or mean_tokens > 10_000:
+            n_issues += 1
+            model_name = getattr(slowest_model, "model_name", "unknown") if slowest_model else "unknown"
+            issues.append({
+                "id": n_issues,
+                "title": "High Token Burn & Context Inefficiency",
+                "description": (
+                    "Individual turns consume extremely large numbers of tokens, "
+                    "driving up cost and latency. The model is operating near or "
+                    "above efficient context-utilisation thresholds."
+                ),
+                "evidence": (
+                    f"Total tokens: {total_tokens:,} (in={getattr(tu, 'total_input_tokens', 0):,}, "
+                    f"out={getattr(tu, 'total_output_tokens', 0):,}). "
+                    f"Max per turn: {max_tokens:,}. Mean per turn: {mean_tokens:.0f}. "
+                    f"Estimated cost: ${total_cost:.4f}. "
+                    f"Primary model: {model_name}."
+                ),
+                "impact": (
+                    f"At ${total_cost:.4f} per batch, costs scale quickly. "
+                    f"Large contexts also inflate TTFT and total latency. "
+                    f"Context window utilisation: avg={getattr(tu, 'mean_usage_percent', 0):.1%}."
+                ),
+                "root_cause": (
+                    "No context summarisation or pruning between turns. "
+                    "Full conversation history + tool outputs are fed back every call. "
+                    "No token budget enforcement per turn."
+                ),
+                "recommendations": [
+                    "Implement progressive summarisation: replace older turns with a running summary after N messages.",
+                    "Add per-turn token cap (e.g. 200K input max) and abort with clear error if exceeded.",
+                    "Compress tool results before adding to context: store only key findings, not full raw output.",
+                    "Use a smaller/cheaper model for simple routing decisions; reserve large model for complex generation only.",
+                ],
+                "severity": "Critical" if total_cost > 5.0 or max_tokens > 300_000 else "High",
+            })
+
+        # ------------------------------------------------------------------
+        # Issue 3: Tool Misconfiguration & Failures
+        # ------------------------------------------------------------------
+        tool_failure_rate = 1.0 - getattr(ts, "overall_success_rate", 1.0)
+        if worst_tool and worst_rate < 0.8 or tool_failure_rate > 0.05:
+            n_issues += 1
+            tool_name = getattr(worst_tool, "name", "unknown") if worst_tool else "unknown"
+            tool_fails = getattr(worst_tool, "failures", 0) if worst_tool else 0
+            tool_calls = getattr(worst_tool, "total_calls", 0) if worst_tool else 0
+            issues.append({
+                "id": n_issues,
+                "title": f"Tool Misconfiguration: {tool_name}",
+                "description": (
+                    f"The `{tool_name}` tool fails inconsistently, indicating "
+                    f"missing credentials, broken dependencies, or an unmaintained integration."
+                ),
+                "evidence": (
+                    f"`{tool_name}` success rate: {worst_rate:.1%} "
+                    f"({tool_calls - tool_fails}/{tool_calls} calls succeeded). "
+                    f"Overall tool failure rate: {tool_failure_rate:.1%}. "
+                    f"Total tool calls: {getattr(ts, 'total_tool_calls', 0)}."
+                ),
+                "impact": (
+                    "Failed tool calls force the agent to either retry or skip a step, "
+                    "lengthening the turn and reducing task-completion confidence."
+                ),
+                "root_cause": (
+                    "External service credentials (e.g. ClawHub) not configured. "
+                    "Tool error is swallowed instead of being surfaced to the operator."
+                ),
+                "recommendations": [
+                    f"Fix or disable `{tool_name}`: either configure the required credentials or remove the tool from the agent.",
+                    "Add pre-flight tool health check at agent startup: validate every tool with a dry-run call.",
+                    "Graceful degradation: if a tool fails, fall back to a simpler alternative instead of erroring out.",
+                    "Surface tool errors in the final response so the user knows why a step was skipped.",
+                ],
+                "severity": "High" if worst_rate < 0.5 else "Medium",
+            })
+
+        # ------------------------------------------------------------------
+        # Issue 4: LLM Latency Bottlenecks
+        # ------------------------------------------------------------------
+        max_dur = getattr(tb, "max_duration_s", 0.0)
+        mean_dur = getattr(tb, "mean_duration_s", 0.0)
+        mean_ttft = getattr(getattr(lp, "ttft", None), "mean", 0.0) if lp else 0.0
+        max_ttft = getattr(getattr(lp, "ttft", None), "max", 0.0) if lp else 0.0
+        slow_prompts = sum(
+            getattr(w, "slow_prompt_processing_count", 0)
+            for w in getattr(lp, "weekly_summaries", [])
+        )
+
+        if max_dur > 120 or mean_ttft > 5000 or slow_prompts > 0:
+            n_issues += 1
+            slowest_turn = getattr(lp, "slowest_turns", [])
+            slowest_id = getattr(slowest_turn[0], "turn_id", "N/A") if slowest_turn else "N/A"
+            slowest_lat_ms = getattr(slowest_turn[0], "total_latency_ms", 0.0) if slowest_turn else 0.0
+            issues.append({
+                "id": n_issues,
+                "title": "LLM Latency & Slow-Turn Bottlenecks",
+                "description": (
+                    "Certain turns experience extreme latency, with TTFT reaching "
+                    "multiple seconds and entire turns taking minutes to complete."
+                ),
+                "evidence": (
+                    f"Max turn duration: {max_dur:.1f}s. Mean: {mean_dur:.1f}s. "
+                    f"Max TTFT: {max_ttft:.0f}ms. Mean TTFT: {mean_ttft:.0f}ms. "
+                    f"Slowest LLM call: {slowest_id} at {slowest_lat_ms:.0f}ms. "
+                    f"Slow prompt processing events: {slow_prompts}."
+                ),
+                "impact": (
+                    "High latency degrades user experience and increases the risk "
+                    "of timeouts or impatient re-submissions."
+                ),
+                "root_cause": (
+                    "Large input contexts + complex model = long prompt-processing time. "
+                    "No streaming or early-token delivery to the user. No timeout safeguard."
+                ),
+                "recommendations": [
+                    "Set a hard turn timeout (e.g. 120s) and return a partial result + explanation if exceeded.",
+                    "Enable response streaming: deliver tokens to the user as soon as TTFT completes.",
+                    "Break large tasks into smaller sub-turns rather than one monolithic generation.",
+                    "Consider model-switching: use a faster model for simple steps, large model only for complex generation.",
+                ],
+                "severity": "High" if max_dur > 300 else "Medium",
+            })
+
+        # ------------------------------------------------------------------
+        # Issue 5: Error Cascades & Poor Session Recovery
+        # ------------------------------------------------------------------
+        cascades = getattr(sf, "n_error_cascades", 0)
+        recovered = getattr(sf, "n_recovery_sessions", 0)
+        persistent = getattr(ec, "persistent_error_categories", [])
+
+        if cascades > 0 or ec.recovery_rate < 0.5:
             n_issues += 1
             issues.append({
                 "id": n_issues,
-                "title": "Redundant Research Sub-Processes",
-                "description": "The system launches unnecessary research sub-agents even for well-understood topics, consuming significant time and tokens.",
-                "evidence": f"Total tokens: {tu.total_tokens:,} (in={tu.total_input_tokens:,}, out={tu.total_output_tokens:,}). Mean tokens per turn: {mean_tokens:.0f}.",
-                "impact": f"High token burn ({tu.total_tokens:,} tokens) suggests repeated research cycles. Estimated cost: ${tu.estimated_total_cost:.4f}.",
-                "root_cause": "Pipeline rigidly enforces a research stage before allowing content generation, regardless of whether user provided a clear, specific topic.",
+                "title": "Error Cascades & Failed Recovery",
+                "description": (
+                    "Errors in one turn tend to cascade into subsequent turns within "
+                    "the same session, and the agent fails to recover automatically."
+                ),
+                "evidence": (
+                    f"Error cascades detected: {cascades}. "
+                    f"Sessions that recovered: {recovered}. "
+                    f"Persistent error categories: {', '.join(persistent) if persistent else 'none'}. "
+                    f"Overall recovery rate: {ec.recovery_rate:.1%}."
+                ),
+                "impact": (
+                    "A single auth or tool failure can poison an entire session, "
+                    "leading to multiple wasted turns and poor user experience."
+                ),
+                "root_cause": (
+                    "No checkpoint-and-resume logic. After an error, the agent restarts "
+                    "from scratch without isolating the failed component."
+                ),
                 "recommendations": [
-                    "Skip research for known topics: add topic whitelist to bypass research sub-agent.",
-                    "Make research optional: ask user 'Would you like me to do research, or proceed with standard content?'",
-                    "Cache research results: static knowledge should be cached and reused instead of re-querying.",
+                    "Implement per-turn checkpointing: if a turn fails, retry only that step with a simpler prompt.",
+                    "Add circuit-breaker per tool: after N consecutive failures, disable the tool for the remainder of the session.",
+                    "Fail fast on auth errors: do not attempt subsequent LLM calls until credentials are validated.",
+                    "Session-level retry policy: max 3 error turns per session, then escalate to human operator.",
                 ],
-                "severity": "Critical",
+                "severity": "High" if cascades > 1 else "Medium",
             })
 
-        # Issue 3: API Connection Failures
-        if total_error_turns > 0:
+        # ------------------------------------------------------------------
+        # Issue 6: Import / Syntax Errors in Agent Codebase
+        # ------------------------------------------------------------------
+        code_errors = import_count + syntax_count
+        if code_errors > 0:
             n_issues += 1
+            # Grab an example message from the first import/syntax error category
+            example = ""
+            for c in getattr(ec, "categories", []):
+                if getattr(c, "category", "") in ("import", "syntax"):
+                    msgs = getattr(c, "example_messages", [])
+                    if msgs:
+                        example = msgs[0][:120]
+                        break
             issues.append({
                 "id": n_issues,
-                "title": "Network/API Connection Failures \u0026 Retry Storms",
-                "description": "System experienced repeated API connection failures that cascaded into multiple user retries and re-executions.",
-                "evidence": f"Total error turns: {total_error_turns}/{total_turns} ({error_rate:.1%}). Categories: network={network_errors}, api_auth={api_errors}, timeout={sum(1 for c in ec.categories if c.category == 'timeout' for _ in [c]) if hasattr(ec, 'categories') else 0}.",
-                "impact": f"Error rate of {error_rate:.1%} indicates significant reliability issues. Recovery rate: {ec.recovery_rate:.1%}.",
-                "root_cause": "System throws immediately on connection errors without automatic retry, leading to user retry storms.",
+                "title": "Agent Codebase Regressions (Import / Syntax)",
+                "description": (
+                    "The agent's own Python code contains import or syntax errors, "
+                    "indicating recent breaking changes or incomplete refactoring."
+                ),
+                "evidence": (
+                    f"Import errors: {import_count}. Syntax errors: {syntax_count}."
+                    + (f" Example: {example}..." if example else "")
+                ),
+                "impact": (
+                    "These errors crash the agent mid-turn, producing no useful output "
+                    "and forcing the user to restart the session."
+                ),
+                "root_cause": (
+                    "Refactoring or package upgrades broke module paths. "
+                    "No static analysis (lint/type-check) is run before deployment."
+                ),
                 "recommendations": [
-                    "Implement automatic retry with exponential backoff on APIConnectionError.",
-                    "Add circuit breaker: after 2 consecutive failures, pause briefly before subsequent retries.",
-                    "Resume from checkpoint after failure instead of restarting the entire workflow.",
+                    "Run `make type-check` and `make check` on every PR before merging.",
+                    "Add CI step that imports every agent module to catch ImportError early.",
+                    "Pin dependency versions and adopt dependabot/renovate for controlled upgrades.",
+                    "Add smoke tests that run a single end-to-end turn against a mock provider.",
                 ],
-                "severity": "High",
+                "severity": "High" if import_count > 2 else "Medium",
             })
 
-        # Issue 4: SVG/XML Formatting Bug
-        if fs_errors > 0 or exec_errors > 0 or tool_failures > 0:
-            n_issues += 1
-            issues.append({
-                "id": n_issues,
-                "title": "SVG XML Formatting Bug (XML Escaping)",
-                "description": "Generated SVG slides contained unescaped XML special characters causing parsing failures, requiring multiple fix attempts.",
-                "evidence": f"Filesystem errors: {fs_errors}, Execution errors: {exec_errors}, Import errors: {tool_failures}. Tool success rate: {ts.overall_success_rate:.1%}.",
-                "impact": f"Tool failures ({ts.total_tool_failures}/{ts.total_tool_calls}) cause repeated conversion attempts. Success rate: {ts.overall_success_rate:.1%}.",
-                "root_cause": "LLM-generated SVG content does not automatically escape XML special characters (&, <, >) that appear in tool/brand names.",
-                "recommendations": [
-                    "Pre-process LLM output: run all generated SVG text through XML sanitizer before writing to file.",
-                    "Make svg_to_pptx converter robust by adding sanitization pass before XML parsing.",
-                    "Wrap SVG generation with try/catch: auto-sanitize and retry before surfacing error to user.",
-                ],
-                "severity": "High",
-            })
-
-        # Issue 5: History Bloat
-        if total_sessions > 0 and avg_turns_per_session > 10:
-            n_issues += 1
-            issues.append({
-                "id": n_issues,
-                "title": "Inefficient History \u0026 Session Growth",
-                "description": "history.jsonl grows excessively with empty events and redundant metadata, impacting performance and token costs.",
-                "evidence": f"Sessions: {total_sessions} (real={sf.total_real_sessions}, heartbeat={sf.total_heartbeat_sessions}). Avg turns per session: {avg_turns_per_session:.1f}.",
-                "impact": f"Bloated history increases token costs per subsequent call. Session size distribution: min={sf.session_size_distribution.get('min', 0)} max={sf.session_size_distribution.get('max', 0)} median={sf.session_size_distribution.get('median', 0):.1f}.",
-                "root_cause": "Every user message generates ~10-15 events (tool_call, tool_update, tool_result, usage_metadata, usage_summary). Many are empty but recorded at full size.",
-                "recommendations": [
-                    "Deduplicate redundant events: skip empty chat.usage_metadata and chat.tool_update events.",
-                    "Compress tool results: store only summary/hash of large results in history; keep full result in separate cache.",
-                    "Implement history compaction: periodically remove empty events and deduplicate usage summaries.",
-                ],
-                "severity": "Medium",
-            })
-
-        # If no significant issues found, create a minimal report
+        # ------------------------------------------------------------------
+        # Fallback: no significant issues
+        # ------------------------------------------------------------------
         if not issues:
             n_issues = 1
             issues.append({
                 "id": 1,
                 "title": "No Major Issues Detected",
-                "description": "Analysis did not identify significant bottlenecks in the sessions analyzed.",
-                "evidence": f"Total turns: {total_turns}, Sessions: {total_sessions}, Error rate: {error_rate:.1%}, Mean quality: {mean_quality:.3f}.",
+                "description": (
+                    "Analysis did not identify significant bottlenecks in the "
+                    "jiuwenswarm sessions analyzed."
+                ),
+                "evidence": (
+                    f"Total turns: {total_turns}, Sessions: {total_sessions}, "
+                    f"Error rate: {error_rate:.1%}, Mean quality: {mean_quality:.3f}."
+                ),
                 "impact": "Process appears to be running smoothly.",
                 "root_cause": "N/A",
                 "recommendations": ["Continue monitoring for trends."],
                 "severity": "Info",
             })
 
-        # Calculate time breakdown from actual data
-        total_time_s = tb.total_time_s if hasattr(tb, 'total_time_s') else 0.0
+        # ------------------------------------------------------------------
+        # Time metrics
+        # ------------------------------------------------------------------
+        total_time_s = getattr(tb, "total_time_s", 0.0)
         total_time_min = total_time_s / 60.0
-        mean_dur = tb.mean_duration_s if hasattr(tb, 'mean_duration_s') else 0.0
-        median_dur = tb.median_duration_s if hasattr(tb, 'median_duration_s') else 0.0
+        mean_dur = getattr(tb, "mean_duration_s", 0.0)
+        median_dur = getattr(tb, "median_duration_s", 0.0)
+        max_dur = getattr(tb, "max_duration_s", 0.0)
 
-        # Build report header
-        lines.append("# Session Analysis Report: Process Bottlenecks \u0026 Recommendations")
+        # ------------------------------------------------------------------
+        # Header
+        # ------------------------------------------------------------------
+        lines.append("# jiuwenswarm Session Analysis Report")
         lines.append("")
         lines.append(f"**Generated:** {result.generated_at.strftime('%Y-%m-%d')}")
-        lines.append(f"**Analyzed Sessions:** {total_sessions} session(s)")
-        lines.append(f"**Location:** `{self._loader._log_dir / 'agent' / 'sessions'}`")
+        lines.append(f"**Analyzed Sessions:** {total_sessions}")
+        lines.append(f"**Total Turns:** {total_turns}")
+        lines.append(f"**Log Directory:** `{self._loader._log_dir}`")
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -377,10 +558,10 @@ class TrajectoriesReport:
         # Executive Summary
         h("Executive Summary")
         lines.append(
-            f"This report analyzes session directories to identify process inefficiencies, "
-            f"bottlenecks, and issues that significantly delay task completion. Based on detailed "
-            f"inspection of session histories, metadata, and workflow patterns, **{len(issues)} major issue(s)** "
-            f"were identified across **{total_turns} turns** in **{total_sessions} session(s)**."
+            f"This report analyses jiuwenswarm agent session logs to identify "
+            f"operational inefficiencies, cost drivers, and reliability issues. "
+            f"**{len(issues)} significant issue(s)** were identified across "
+            f"**{total_turns} turns** in **{total_sessions} session(s)**."
         )
         lines.append("")
 
@@ -409,24 +590,19 @@ class TrajectoriesReport:
                 lines.append(f"- {rec}")
             lines.append("")
 
-        # Summary: Time Breakdown
+        # Time Breakdown
         h("Summary: Time Breakdown")
-        lines.append("| Phase | Time | What Actually Happened |")
-        lines.append("|-------|------|------------------------|")
+        lines.append("| Phase | Time | Notes |")
+        lines.append("|-------|------|-------|")
         lines.append(f"| Total wall time | {total_time_s:.0f}s ({total_time_min:.1f} min) | All turns combined |")
-        lines.append(f"| Mean turn duration | {mean_dur:.1f}s | Average across {tb.n_turns_with_timing} timed turns |")
-        lines.append(f"| Median turn duration | {median_dur:.1f}s | Typical turn latency |")
-        lines.append(f"| Max turn duration | {tb.max_duration_s:.1f}s | Slowest single turn |")
-        if tu.total_tokens > 0:
-            lines.append(f"| Token overhead | {tu.total_tokens:,} tokens | Input/output across all turns |")
-        lines.append("")
-        lines.append(
-            f"**Potential time reduction: varies by issue severity. "
-            f"Auto-approving stages and caching research could reduce wall time by 50-70%.**"
-        )
+        lines.append(f"| Mean turn duration | {mean_dur:.1f}s | Across {getattr(tb, 'n_turns_with_timing', 0)} timed turns |")
+        lines.append(f"| Median turn duration | {median_dur:.1f}s | Typical latency |")
+        lines.append(f"| Max turn duration | {max_dur:.1f}s | Slowest single turn |")
+        if total_tokens > 0:
+            lines.append(f"| Token overhead | {total_tokens:,} tokens | ~${total_cost:.4f} estimated |")
         lines.append("")
 
-        # Recommended Fixes (Priority Order)
+        # Recommended Fixes
         h("Recommended Fixes (Priority Order)")
         lines.append("")
         lines.append("| Priority | Fix | Effort | Impact |")
@@ -437,16 +613,20 @@ class TrajectoriesReport:
 
         for issue in sorted_issues:
             priority_map = {
-                "Critical": "🔴 P0",
-                "High": "🟡 P1",
-                "Medium": "🟢 P2",
-                "Low": "⚪ P3",
-                "Info": "⚪ P3",
+                "Critical": "P0",
+                "High": "P1",
+                "Medium": "P2",
+                "Low": "P3",
+                "Info": "P4",
             }
-            priority = priority_map.get(issue["severity"], "⚪ P3")
+            priority = priority_map.get(issue["severity"], "P3")
             first_rec = issue["recommendations"][0] if issue["recommendations"] else "N/A"
             effort = "Low" if len(issue["recommendations"]) <= 2 else "Medium"
-            impact = "Saves significant time per task" if issue["severity"] in ("Critical", "High") else "Improves efficiency"
+            impact = (
+                "High cost/reliability improvement"
+                if issue["severity"] in ("Critical", "High")
+                else "Incremental improvement"
+            )
             lines.append(f"| {priority} | {first_rec} | {effort} | {impact} |")
         lines.append("")
 
@@ -455,10 +635,14 @@ class TrajectoriesReport:
         lines.append("")
         if sf.session_profiles:
             for profile in sf.session_profiles:
-                lines.append(f"**{profile.session_id}**")
-                lines.append(f"- Title: {profile.title or 'N/A'}")
-                lines.append(f"- Turns: {profile.n_turns}, Error rate: {profile.error_rate:.1%}")
-                lines.append(f"- Tokens: {profile.total_tokens}, Files delivered: {profile.files_delivered}")
+                sid = getattr(profile, "session_id", "N/A")
+                n_turns = getattr(profile, "n_turns", 0)
+                err_rate = getattr(profile, "error_rate", 0.0)
+                tokens = getattr(profile, "total_tokens", 0)
+                files = getattr(profile, "files_delivered", 0)
+                lines.append(f"**{sid}**")
+                lines.append(f"- Turns: {n_turns}, Error rate: {err_rate:.1%}")
+                lines.append(f"- Tokens: {tokens:,}, Files delivered: {files}")
                 lines.append("")
         else:
             lines.append("No detailed session metadata available.")
