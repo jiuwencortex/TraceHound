@@ -268,12 +268,19 @@ def _parse_jiuwenswarm_turn(
     except (ValueError, TypeError):
         timestamp = datetime.fromtimestamp(0, tz=timezone.utc)
 
-    # Wall-clock duration
+    # Wall-clock duration — stop at the first large intra-turn gap so that
+    # late-arriving stale messages (e.g. session-summary records logged minutes
+    # later under the same request_id) don't inflate the turn duration.
+    _MAX_GAP_S = 120.0  # gaps > 2 min are assumed to be stale log entries
     try:
-        duration_seconds = max(
-            0.0,
-            float(messages[-1].get("timestamp", 0)) - float(messages[0].get("timestamp", 0)),
-        )
+        timestamps = [float(m.get("timestamp", 0)) for m in messages]
+        t_start = timestamps[0]
+        t_end = t_start
+        for ts in timestamps[1:]:
+            if ts - t_end > _MAX_GAP_S:
+                break
+            t_end = ts
+        duration_seconds = max(0.0, t_end - t_start)
     except (ValueError, TypeError):
         duration_seconds = 0.0
 
