@@ -10,6 +10,7 @@ from typing import Optional
 
 import customtkinter as ctk
 
+from analyzer_gui.app_modern import ModernApp
 from analyzer_gui.backend import AnalysisBackend
 from analyzer_gui.views.desktop_report_view import DesktopReportView
 from analyzer_gui.views.errors_view import ErrorsView
@@ -70,7 +71,7 @@ class TraceHoundApp(ctk.CTk):
         self._nav = ctk.CTkFrame(self, width=_NAV_WIDTH, corner_radius=0,
                                  fg_color=("gray18", "gray12"))
         self._nav.grid(row=0, column=0, rowspan=2, sticky="nsew")
-        self._nav.rowconfigure(len(_NAV_ENTRIES) + 1, weight=1)
+        self._nav.rowconfigure(len(_NAV_ENTRIES) + 2, weight=1)   # spacer before Journal btn
         self._nav.grid_propagate(False)
 
         ctk.CTkLabel(
@@ -100,6 +101,30 @@ class TraceHoundApp(ctk.CTk):
             )
             btn.grid(row=i + 2, column=0, sticky="ew", padx=8, pady=2)
             self._nav_buttons.append(btn)
+
+        # ── Journal (Modern View) button — pinned to bottom of nav ─────
+        # Layout: rows 2..(N+1)=nav buttons  |  row N+2=spacer(weight=1)
+        #         row N+3=separator           |  row N+4=Journal button
+        _jrow = len(_NAV_ENTRIES) + 4   # Journal row; separator at _jrow-1
+        ctk.CTkFrame(self._nav, height=1,
+                     fg_color=("gray35", "gray28")).grid(
+            row=_jrow - 1, column=0, sticky="ew", padx=8, pady=(0, 4))
+        self._journal_btn = ctk.CTkButton(
+            self._nav,
+            text="  ✨  Journal\n   Modern View",
+            font=("", 11),
+            height=52,
+            corner_radius=8,
+            fg_color=("gray28", "#1c2128"),
+            hover_color=("gray35", "#232838"),
+            text_color=("#4a90d9", "#58a6ff"),
+            anchor="w",
+            command=self._open_journal,
+        )
+        self._journal_btn.grid(row=_jrow, column=0, sticky="ew",
+                               padx=8, pady=(0, 12))
+
+        self._modern_app: Optional[ModernApp] = None
 
         # ── Content area ───────────────────────────────────────────────
         self._content = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
@@ -198,6 +223,21 @@ class TraceHoundApp(ctk.CTk):
         for btn in self._nav_buttons:
             btn.configure(state="normal")
 
+    def _open_journal(self) -> None:
+        """Open (or raise) the Modern consumer-friendly dashboard."""
+        if self._modern_app is not None and self._modern_app.winfo_exists():
+            self._modern_app.focus()
+            if self._last_result is not None:
+                self._modern_app.load(self._last_result, self._last_reporter)
+            return
+        self._modern_app = ModernApp(
+            self,
+            result=self._last_result,
+            reporter=self._last_reporter,
+            loader=self._last_loader,
+        )
+        self._modern_app.focus()
+
     def _navigate_to_session(self, session_id: str, turn_id: str = "") -> None:
         """Switch to Sessions view and open the requested session/turn."""
         self._show_view(6)   # Sessions is index 6
@@ -290,6 +330,10 @@ class TraceHoundApp(ctk.CTk):
 
         for view in self._views[1:]:
             view.refresh(result, loader, reporter)
+
+        # Refresh modern view if open
+        if self._modern_app is not None and self._modern_app.winfo_exists():
+            self._modern_app.load(result, reporter, loader)
 
         self._show_view(1)
 
