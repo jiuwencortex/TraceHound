@@ -16,8 +16,11 @@ Usage::
 from __future__ import annotations
 
 import json
+import os
+import urllib.request
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import datetime, timezone
 
 from .analyzers.content_delivery import (
@@ -74,6 +77,19 @@ from .analyzers.user_queries import (
 )
 from .loader import TrajectoriesLoader, TurnRecord
 from .scorer import compute_qualities
+
+
+def _read_jiuwenswarm_env() -> dict[str, str]:
+    """Parse ~/.jiuwenswarm/.env for API credentials."""
+    env_path = Path.home() / ".jiuwenswarm" / ".env"
+    env: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
 
 
 @dataclass(frozen=True)
@@ -649,6 +665,228 @@ class TrajectoriesReport:
             lines.append("")
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # LLM-generated desktop report
+    # ------------------------------------------------------------------
+
+    def render_desktop_llm(self, result: ReportResult) -> str:
+        """Send real session data to the configured LLM and return its markdown report.
+
+        Credentials are read from ~/.jiuwenswarm/.env (API_KEY, API_BASE, MODEL_NAME).
+        Falls back to environment variables of the same names.
+        Raises RuntimeError if no API key is found or the call fails.
+        """
+        env = _read_jiuwenswarm_env()
+        api_key  = env.get("API_KEY")  or os.environ.get("API_KEY", "")
+        api_base = env.get("API_BASE") or os.environ.get("API_BASE", "https://api.deepseek.com")
+        model    = env.get("MODEL_NAME") or os.environ.get("MODEL_NAME", "deepseek-chat")
+
+        if not api_key:
+            raise RuntimeError(
+                "No API_KEY found in ~/.jiuwenswarm/.env or environment. "
+                "Add API_KEY=sk-... to that file."
+            )
+
+        prompt = self._build_llm_prompt(result)
+        return self._call_llm_openai_compat(prompt, api_key, api_base, model)
+
+    def _build_llm_prompt(self, result: ReportResult) -> str:
+        """Serialize ReportResult + raw turn samples into a data prompt for the LLM."""
+        dh  = result.data_health
+        qt  = result.quality_trends
+        ec  = result.error_categories
+        sf  = result.session_flow
+        tb  = result.time_bottlenecks
+        tu  = result.token_usage
+        ts  = result.tool_success
+        cp  = result.correction_patterns
+
+        lines: list[str] = []
+
+        # ── Overview ──────────────────────────────────────────────────
+        lines.append("## Agent Session Data")
+        dr = dh.date_range
+        date_range = (
+            f"{dr[0].strftime('%Y-%m-%d')} to {dr[1].strftime('%Y-%m-%d')}"
+            if dr else "unknown"
+        )
+        lines += [
+            f"- Log directory: {self._loader._log_dir}",
+            f"- Date range: {date_range}",
+            f"- Total sessions: {sf.total_sessions} (real: {sf.total_real_sessions}, heartbeat: {sf.total_heartbeat_sessions})",
+            f"- Total turns: {dh.total_turns}",
+            f"- Skipped (malformed): {dh.skipped_records}",
+        ]
+
+        # ── Error analysis ────────────────────────────────────────────
+        lines.append("\n## Error Analysis")
+        lines += [
+            f"- Overall error rate: {ec.overall_error_rate:.1%} ({ec.error_turns}/{ec.total_turns} turns had errors)",
+            f"- Recovery rate: {ec.recovery_rate:.1%}",
+        ]
+        if ec.categories:
+            lines.append("- Error breakdown by category:")
+            for cat in ec.categories:
+                if cat.count > 0:
+                    ex = cat.example_messages[0][:120] if cat.example_messages else ""
+                    lines.append(f"  * {cat.category}: {cat.count} occurrences ({cat.percentage_of_errors:.1%} of errors)"
+                                  + (f'\n    example: "{ex}"' if ex else ""))
+
+        # ── Quality ───────────────────────────────────────────────────
+        lines.append("\n## Quality Metrics")
+        lines += [
+            f"- Mean quality score: {qt.overall_mean:.3f}",
+            f"- Trend: {qt.trend_direction}",
+            f"- Best week: {qt.best_week or 'N/A'}",
+            f"- Worst week: {qt.worst_week or 'N/A'}",
+            f"- Correction rate: {cp.baseline_correction_rate:.1%} ({cp.total_corrected_turns} corrected turns)",
+        ]
+        if qt.weeks:
+            lines.append("- Weekly quality:")
+            for w in qt.weeks:
+                lines.append(f"  * {w.week_tag}: mean={w.mean_quality:.3f} n={w.n_turns}")
+
+        # ── Timing ────────────────────────────────────────────────────
+        lines.append("\n## Timing")
+        lines += [
+            f"- Timed turns: {tb.n_turns_with_timing}/{tb.n_turns_total}",
+            f"- Duration: min={tb.min_duration_s:.1f}s  median={tb.median_duration_s:.1f}s  mean={tb.mean_duration_s:.1f}s  p90={tb.p90_duration_s:.1f}s  max={tb.max_duration_s:.1f}s",
+            f"- Total wall time: {tb.total_time_s:.1f}s ({tb.total_time_s/60:.1f} min)",
+        ]
+        if tb.slowest_turns:
+            lines.append("- Slowest turns:")
+            for rec in tb.slowest_turns[:8]:
+                st = "ERR" if rec.has_error else ("OK" if rec.task_completed else "INC")
+                q_str = getattr(rec, "user_query", "")[:80] if hasattr(rec, "user_query") else ""
+                lines.append(f"  * {rec.turn_id[:28]} {rec.duration_seconds:.1f}s [{st}] q={rec.quality:.2f}"
+                              + (f'  query: "{q_str}"' if q_str else ""))
+
+        # ── Tokens ────────────────────────────────────────────────────
+        lines.append("\n## Token Usage")
+        if tu.total_tokens > 0:
+            lines += [
+                f"- Total tokens: {tu.total_tokens:,} (input: {tu.total_input_tokens:,}, output: {tu.total_output_tokens:,})",
+                f"- Mean per turn: {tu.mean_tokens_per_turn:.0f}  max: {tu.max_tokens_per_turn:,}",
+                f"- Estimated cost: ${tu.estimated_total_cost:.4f}",
+                f"- Turns near context limit: {tu.turns_near_limit}",
+            ]
+            if tu.model_summary:
+                lines.append("- By model:")
+                for m in tu.model_summary:
+                    lines.append(f"  * {m.model_name}: {m.n_turns} turns, {m.total_tokens:,} tokens, ~${m.estimated_cost:.4f}")
+        else:
+            lines.append("- No token data available.")
+
+        # ── Tools ─────────────────────────────────────────────────────
+        lines.append("\n## Tool Usage")
+        lines += [
+            f"- Total tool calls: {ts.total_tool_calls}",
+            f"- Failures: {ts.total_tool_failures}",
+            f"- Success rate: {ts.overall_success_rate:.1%}",
+        ]
+        if ts.per_tool_stats:
+            lines.append("- Per-tool breakdown:")
+            for pt in ts.per_tool_stats[:10]:
+                pt_name  = getattr(pt, "name", None) or getattr(pt, "tool_name", "?")
+                pt_calls = getattr(pt, "total_calls", 0)
+                pt_ok    = getattr(pt, "successes", 0)
+                pt_fail  = getattr(pt, "total_failures", getattr(pt, "failures", pt_calls - pt_ok))
+                pt_rate  = getattr(pt, "success_rate", 1.0)
+                lines.append(f"  * {pt_name}: {pt_calls} calls, {pt_ok} OK, {pt_fail} failed ({pt_rate:.1%})")
+
+        # ── Session breakdown ─────────────────────────────────────────
+        lines.append("\n## Session Breakdown")
+        for p in sf.session_profiles:
+            sid      = getattr(p, "session_id", "?")
+            n_turns  = getattr(p, "n_turns", 0)
+            err_rate = getattr(p, "error_rate", 0.0)
+            tokens   = getattr(p, "total_tokens", 0)
+            files    = getattr(p, "files_delivered", 0)
+            mode     = getattr(p, "agent_mode", "")
+            dur      = getattr(p, "duration_s", 0.0)
+            lines.append(f"- {sid}: {n_turns} turns, error_rate={err_rate:.1%}, "
+                          f"tokens={tokens:,}, files={files}, mode={mode}, duration={dur:.1f}s")
+
+        # ── Sample turns (actual queries + errors) ────────────────────
+        lines.append("\n## Sample Turns (actual data)")
+        real_turns = [t for t in self._turns if not t.is_heartbeat][:20]
+        for t in real_turns:
+            q   = (t.user_query or "").strip()[:100]
+            err = (t.error_text or "").strip()[:100] if hasattr(t, "error_text") else ""
+            err = err or (t.error_category if t.error_category else "")
+            lines.append(
+                f"- [{t.session_id[:18]}] dur={t.duration_seconds:.1f}s  "
+                f"tokens={t.total_tokens}  "
+                + (f'error={err[:80]}  ' if err else "")
+                + (f'query="{q}"' if q else "no query")
+            )
+
+        system = (
+            "You are an expert AI agent performance analyst. "
+            "You analyze operational logs from an AI agent framework called jiuwenswarm "
+            "and produce detailed technical reports identifying real issues. "
+            "You ONLY report issues that are actually present in the provided data — "
+            "never hallucinate problems that are not supported by the numbers."
+        )
+
+        user = f"""{chr(10).join(lines)}
+
+---
+
+Using the data above, write a complete "jiuwenswarm Session Analysis Report" in markdown.
+
+Required sections and format:
+1. Header: title, Generated date, Analyzed Sessions, Total Turns, Log Directory
+2. Executive Summary: state how many significant issues were found
+3. For each real issue found: "## N. Issue: <title>" with subsections:
+   ### Description
+   ### Evidence  (use actual numbers from the data)
+   ### Impact
+   ### Root Cause
+   ### Recommendations (bullet list)
+4. "## Summary: Time Breakdown" — markdown table with Phase, Time, Notes columns
+5. "## Recommended Fixes (Priority Order)" — markdown table with Priority (P0/P1/P2), Fix, Effort, Impact columns
+6. "## Appendix: Session Metadata" — one entry per session with turns, error rate, tokens, files
+
+Use real numbers from the data. Be specific and concise.
+"""
+        return f"SYSTEM: {system}\n\nUSER:\n{user}"
+
+    def _call_llm_openai_compat(
+        self, prompt: str, api_key: str, api_base: str, model: str
+    ) -> str:
+        """Call an OpenAI-compatible chat endpoint and return the response text."""
+        system_text = ""
+        user_text = prompt
+        if prompt.startswith("SYSTEM: "):
+            parts = prompt.split("\n\nUSER:\n", 1)
+            system_text = parts[0][len("SYSTEM: "):]
+            user_text = parts[1] if len(parts) > 1 else prompt
+
+        base = api_base.rstrip("/")
+        url = f"{base}/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_text},
+                {"role": "user",   "content": user_text},
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.3,
+        }
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            url, data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+        return result["choices"][0]["message"]["content"].strip()
 
     def render_json(self, result: ReportResult) -> str:
         """Return machine-readable JSON."""

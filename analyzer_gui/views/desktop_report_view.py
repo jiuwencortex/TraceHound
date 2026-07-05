@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 from pathlib import Path
 from typing import Any
@@ -298,9 +299,9 @@ class DesktopReportView(ctk.CTkFrame):
 
         self._mode_seg = ctk.CTkSegmentedButton(
             hdr,
-            values=["Report", "Tables"],
+            values=["Report", "AI Report", "Tables"],
             command=self._on_mode_change,
-            width=200,
+            width=280,
         )
         self._mode_seg.set("Report")
         self._mode_seg.grid(row=0, column=1, padx=(0, 8))
@@ -342,6 +343,54 @@ class DesktopReportView(ctk.CTkFrame):
         scrollbar.grid(row=0, column=1, sticky="ns")
         self._text_widget.configure(yscrollcommand=scrollbar.set)
         self._configure_tags()
+
+        # ── AI Report mode ───────────────────────────────────────────
+        self._ai_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._ai_frame.rowconfigure(1, weight=1)
+        self._ai_frame.columnconfigure(0, weight=1)
+
+        ai_toolbar = ctk.CTkFrame(self._ai_frame, fg_color="transparent")
+        ai_toolbar.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 6))
+        ai_toolbar.columnconfigure(1, weight=1)
+
+        self._ai_gen_btn = ctk.CTkButton(
+            ai_toolbar, text="⚡ Generate AI Report",
+            width=180, command=self._generate_ai_report,
+        )
+        self._ai_gen_btn.grid(row=0, column=0)
+
+        self._ai_status = ctk.CTkLabel(
+            ai_toolbar, text="Click Generate to analyse sessions with AI.",
+            font=("", 11), text_color=("gray50", "gray60"), anchor="w",
+        )
+        self._ai_status.grid(row=0, column=1, padx=(14, 0), sticky="w")
+
+        ai_text_frame = ctk.CTkFrame(self._ai_frame, fg_color="transparent")
+        ai_text_frame.grid(row=1, column=0, sticky="nsew")
+        ai_text_frame.rowconfigure(0, weight=1)
+        ai_text_frame.columnconfigure(0, weight=1)
+
+        self._ai_text = tk.Text(
+            ai_text_frame,
+            wrap="word",
+            state="disabled",
+            bg="#1a1a1a",
+            fg="#e0e0e0",
+            insertbackground="white",
+            selectbackground="#4a90d9",
+            selectforeground="white",
+            padx=28,
+            pady=18,
+            font=("Consolas", 11),
+            relief="flat",
+            borderwidth=0,
+        )
+        self._ai_text.grid(row=0, column=0, sticky="nsew")
+        ai_scrollbar = ctk.CTkScrollbar(ai_text_frame, command=self._ai_text.yview)
+        ai_scrollbar.grid(row=0, column=1, sticky="ns")
+        self._ai_text.configure(yscrollcommand=ai_scrollbar.set)
+        # Reuse same tag configuration from main text widget
+        self._ai_frame_built = True
 
         # ── Tables mode: issue cards + summary tables ────────────────
         self._tables_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -438,14 +487,150 @@ class DesktopReportView(ctk.CTkFrame):
         if result is not None:
             self._populate_tables(result, md_text)
 
+    # ── AI Report generation ──────────────────────────────────────────────────
+
+    def _generate_ai_report(self) -> None:
+        """Kick off LLM report generation in a background thread."""
+        if self._result is None or self._reporter is None:
+            self._ai_status.configure(text="Run analysis first, then click Generate.")
+            return
+
+        self._ai_gen_btn.configure(state="disabled", text="Generating…")
+        self._ai_status.configure(text="Calling AI — this may take 20–60 seconds…")
+        self._ai_text.configure(state="normal")
+        self._ai_text.delete("1.0", "end")
+        self._ai_text.configure(state="disabled")
+
+        threading.Thread(
+            target=self._run_ai_thread,
+            daemon=True,
+        ).start()
+
+    def _run_ai_thread(self) -> None:
+        """Background thread: call LLM, then schedule UI update on main thread."""
+        try:
+            md = self._reporter.render_desktop_llm(self._result)
+            self.after(0, self._on_ai_done, md, None)
+        except Exception as exc:
+            self.after(0, self._on_ai_done, None, str(exc))
+
+    def _on_ai_done(self, markdown: str | None, error: str | None) -> None:
+        """Called on the main thread once the LLM call completes."""
+        self._ai_gen_btn.configure(state="normal", text="⚡ Generate AI Report")
+        if error:
+            self._ai_status.configure(
+                text=f"Error: {error[:120]}",
+                text_color=("#c0392b", "#e74c3c"),
+            )
+            return
+
+        self._ai_status.configure(
+            text="✓ AI report generated.",
+            text_color=("#27ae60", "#2ecc71"),
+        )
+        # Render the markdown into the AI text widget using the same tags
+        self._render_ai_markdown(markdown or "")
+
+    def _render_ai_markdown(self, text: str) -> None:
+        """Render markdown into _ai_text using the same tag logic as _render_markdown."""
+        self._ai_text.configure(state="normal")
+        self._ai_text.delete("1.0", "end")
+        # Apply the same tag config
+        w = self._ai_text
+        w.tag_configure("h1",    font=("Consolas", 18, "bold"), foreground="#ffffff",   spacing3=12)
+        w.tag_configure("h2",    font=("Consolas", 14, "bold"), foreground="#7ec8e3",   spacing3=8)
+        w.tag_configure("h3",    font=("Consolas", 12, "bold"), foreground="#a8d8a8",   spacing3=6)
+        w.tag_configure("body",  font=("Consolas", 11),         foreground="#e0e0e0")
+        w.tag_configure("bold",  font=("Consolas", 11, "bold"), foreground="#ffffff")
+        w.tag_configure("code",  font=("Consolas", 10),         foreground="#7ee787",   background="#1e3a2f")
+        w.tag_configure("bullet",font=("Consolas", 11),         foreground="#e0e0e0",   lmargin1=20, lmargin2=30)
+        w.tag_configure("table_header", font=("Consolas", 10, "bold"), foreground="#ffffff",  background="#3a3a3a")
+        w.tag_configure("table_row",    font=("Consolas", 10),          foreground="#d0d0d0")
+        # Reuse the main renderer logic
+        self._render_into(w, text)
+        self._ai_text.configure(state="disabled")
+        self._ai_text.see("1.0")
+
+    def _render_into(self, widget: tk.Text, text: str) -> None:
+        """Shared markdown → tk.Text renderer (used by both report and AI frames)."""
+        lines = text.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+
+            if stripped == "---" or (stripped and set(stripped) == {"-"}):
+                widget.insert("end", "\n" + "—" * 60 + "\n", "body")
+                i += 1; continue
+            if stripped.startswith("# "):
+                self._insert_into(widget, stripped[2:], "h1"); i += 1; continue
+            if stripped.startswith("## "):
+                self._insert_into(widget, stripped[3:], "h2"); i += 1; continue
+            if stripped.startswith("### "):
+                self._insert_into(widget, stripped[4:], "h3"); i += 1; continue
+            if stripped.startswith("```"):
+                i += 1
+                code_lines = []
+                while i < len(lines) and not lines[i].strip().startswith("```"):
+                    code_lines.append(lines[i]); i += 1
+                widget.insert("end", "\n" + "\n".join(code_lines) + "\n", "body")
+                if i < len(lines): i += 1
+                continue
+            if "|" in stripped and stripped.startswith("|"):
+                table_lines = []
+                while i < len(lines) and "|" in lines[i]:
+                    table_lines.append(lines[i]); i += 1
+                rows = []
+                for tl in table_lines:
+                    cells = [c.strip() for c in tl.split("|") if c.strip()]
+                    if cells and not all(c.replace("-", "").replace(":", "") == "" for c in cells):
+                        rows.append(cells)
+                if rows:
+                    widget.insert("end", "\n", "body")
+                    hdr = " | ".join(rows[0])
+                    widget.insert("end", hdr + "\n", "table_header")
+                    widget.insert("end", "=" * len(hdr) + "\n", "table_header")
+                    for row in rows[1:]:
+                        widget.insert("end", " | ".join(row) + "\n", "table_row")
+                    widget.insert("end", "\n", "body")
+                continue
+            if not stripped:
+                widget.insert("end", "\n", "body"); i += 1; continue
+            if stripped.startswith(("- ", "* ")):
+                self._insert_into(widget, "  • " + stripped[2:], "bullet"); i += 1; continue
+            self._insert_into(widget, stripped, "body")
+            i += 1
+
+    def _insert_into(self, widget: tk.Text, text: str, base_tag: str) -> None:
+        """Insert inline-formatted text into a tk.Text widget."""
+        widget.insert("end", "\n", base_tag)
+        i = 0
+        while i < len(text):
+            if text[i:i+2] == "**":
+                end = text.find("**", i + 2)
+                if end != -1:
+                    widget.insert("end", text[i+2:end], (base_tag, "bold"))
+                    i = end + 2; continue
+            if text[i] == "`":
+                end = text.find("`", i + 1)
+                if end != -1:
+                    widget.insert("end", text[i+1:end], (base_tag, "code"))
+                    i = end + 1; continue
+            widget.insert("end", text[i], base_tag)
+            i += 1
+        widget.insert("end", "\n", base_tag)
+
     # ── Mode toggle ───────────────────────────────────────────────────────────
 
     def _on_mode_change(self, mode: str) -> None:
+        self._report_frame.grid_remove()
+        self._ai_frame.grid_remove()
+        self._tables_frame.grid_remove()
         if mode == "Report":
-            self._tables_frame.grid_remove()
             self._report_frame.grid(row=2, column=0, sticky="nsew")
+        elif mode == "AI Report":
+            self._ai_frame.grid(row=2, column=0, sticky="nsew")
         else:
-            self._report_frame.grid_remove()
             self._tables_frame.grid(row=2, column=0, sticky="nsew")
 
     # ── Tables population ─────────────────────────────────────────────────────
