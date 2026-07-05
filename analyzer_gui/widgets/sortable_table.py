@@ -4,13 +4,16 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 import customtkinter as ctk
 
 _HEADER_FONT = ("", 12, "bold")
 _CELL_FONT = ("", 11)
 _ROW_BG_EVEN = ("gray88", "gray18")
-_ROW_BG_ODD = ("gray82", "gray22")
-_HEADER_BG = ("gray70", "gray30")
+_ROW_BG_ODD  = ("gray82", "gray22")
+_HEADER_BG   = ("gray70", "gray30")
+_HOVER_BG    = ("gray76", "gray28")
 
 
 class SortableTable(ctk.CTkScrollableFrame):
@@ -24,6 +27,10 @@ class SortableTable(ctk.CTkScrollableFrame):
         Optional list of minimum column widths in pixels (one per column).
     max_rows:
         If set, only the first *max_rows* rows are rendered (for performance).
+    on_row_click:
+        Optional callback ``(row_data: list, tag: Any) -> None`` called when the
+        user clicks any cell in a data row.  *tag* is the per-row value supplied
+        in the ``row_tags`` argument of :meth:`set_data`.
     """
 
     def __init__(
@@ -32,6 +39,7 @@ class SortableTable(ctk.CTkScrollableFrame):
         columns: list[str],
         col_widths: list[int] | None = None,
         max_rows: int = 500,
+        on_row_click: Callable[[list, Any], None] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(parent, **kwargs)
@@ -39,17 +47,59 @@ class SortableTable(ctk.CTkScrollableFrame):
         self._columns = columns
         self._col_widths = col_widths or [120] * len(columns)
         self._max_rows = max_rows
+        self._on_row_click = on_row_click
+
         self._data: list[list] = []
         self._sort_col: int | None = None
         self._sort_reverse = False
         self._header_labels: list[ctk.CTkLabel] = []
         self._cell_widgets: list[list[ctk.CTkLabel]] = []
-        self._row_highlights: list[str | None] = []  # per-row optional colour
+        self._row_highlights: list[str | None] = []
+        self._row_tags: list[Any] = []
 
         for c in range(len(columns)):
             self.columnconfigure(c, weight=1, minsize=self._col_widths[c])
 
         self._build_headers()
+
+    # ------------------------------------------------------------------
+    # Public
+    # ------------------------------------------------------------------
+
+    def bind_row_click(self, callback: Callable[[list, Any], None]) -> None:
+        """Set or replace the row-click callback after construction."""
+        self._on_row_click = callback
+        self._render()  # re-render to attach/detach bindings
+
+    def set_data(
+        self,
+        data: list[list],
+        row_highlights: list[str | None] | None = None,
+        row_tags: list[Any] | None = None,
+    ) -> None:
+        """Populate the table.
+
+        Parameters
+        ----------
+        data:
+            List of rows; each row is a list of values (str/int/float).
+        row_highlights:
+            Optional per-row fg_color override (e.g. ``'#6b1a1a'`` for red).
+        row_tags:
+            Optional per-row arbitrary objects passed to the ``on_row_click``
+            callback.  Sorted alongside their rows.
+        """
+        self._data = [list(row) for row in data]
+        self._row_highlights = list(row_highlights) if row_highlights else [None] * len(data)
+        self._row_tags = list(row_tags) if row_tags else [None] * len(data)
+        self._sort_col = None
+        self._sort_reverse = False
+        for i, lbl in enumerate(self._header_labels):
+            lbl.configure(text=f"  {self._columns[i]}")
+        self._render()
+
+    def clear(self) -> None:
+        self.set_data([])
 
     # ------------------------------------------------------------------
     # Header
@@ -83,20 +133,20 @@ class SortableTable(ctk.CTkScrollableFrame):
             self._render()
             return
 
-        def _key(row_highlight):
-            row = row_highlight[0]
+        def _key(triple):
+            row = triple[0]
             v = row[col] if col < len(row) else ""
             try:
-                return (0, float(str(v).replace(",", "").replace("%", "")))
+                return (0, float(str(v).replace(",", "").replace("%", "").replace("x", "")))
             except (ValueError, TypeError):
                 return (1, str(v).lower())
 
-        combined = list(zip(self._data, self._row_highlights))
+        combined = list(zip(self._data, self._row_highlights, self._row_tags))
         combined.sort(key=_key, reverse=self._sort_reverse)
-        self._data = [r for r, _ in combined]
-        self._row_highlights = [h for _, h in combined]
+        self._data         = [r for r, _, _ in combined]
+        self._row_highlights = [h for _, h, _ in combined]
+        self._row_tags     = [t for _, _, t in combined]
 
-        # Update header arrows
         for i, lbl in enumerate(self._header_labels):
             col_name = self._columns[i]
             if i == col:
@@ -108,66 +158,53 @@ class SortableTable(ctk.CTkScrollableFrame):
         self._render()
 
     # ------------------------------------------------------------------
-    # Data
-    # ------------------------------------------------------------------
-
-    def set_data(
-        self,
-        data: list[list],
-        row_highlights: list[str | None] | None = None,
-    ) -> None:
-        """Populate the table.
-
-        Parameters
-        ----------
-        data:
-            List of rows; each row is a list of values (str/int/float).
-        row_highlights:
-            Optional per-row fg_color override (e.g. '#6b1a1a' for red).
-            Pass None for a row to use the default alternating colour.
-        """
-        self._data = [list(row) for row in data]
-        self._row_highlights = list(row_highlights) if row_highlights else [None] * len(data)
-        self._sort_col = None
-        self._sort_reverse = False
-        # Reset header arrows
-        for i, lbl in enumerate(self._header_labels):
-            lbl.configure(text=f"  {self._columns[i]}")
-        self._render()
-
-    def clear(self) -> None:
-        self.set_data([])
-
-    # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
 
     def _render(self) -> None:
-        # Destroy existing cell widgets
         for row_cells in self._cell_widgets:
             for w in row_cells:
                 w.destroy()
         self._cell_widgets.clear()
 
+        clickable = self._on_row_click is not None
         rows_to_show = self._data[: self._max_rows]
+
         for r, row in enumerate(rows_to_show):
             highlight = self._row_highlights[r] if r < len(self._row_highlights) else None
+            tag       = self._row_tags[r]       if r < len(self._row_tags)       else None
+
             if highlight:
-                bg = highlight
+                base_bg = highlight
             else:
-                bg = _ROW_BG_EVEN if r % 2 == 0 else _ROW_BG_ODD
+                base_bg = _ROW_BG_EVEN if r % 2 == 0 else _ROW_BG_ODD
 
             row_cells: list[ctk.CTkLabel] = []
             for c in range(len(self._columns)):
-                val = row[c] if c < len(row) else ""
+                val  = row[c] if c < len(row) else ""
                 text = str(val) if val is not None else ""
                 lbl = ctk.CTkLabel(
                     self,
                     text=text,
                     font=_CELL_FONT,
-                    fg_color=bg,
+                    fg_color=base_bg,
                     anchor="w",
+                    cursor="hand2" if clickable else "",
                 )
                 lbl.grid(row=r + 1, column=c, padx=1, pady=0, sticky="ew")
+
+                if clickable:
+                    # Hover effect
+                    def _enter(e, lbl=lbl, bg=base_bg):
+                        lbl.configure(fg_color=_HOVER_BG)
+                    def _leave(e, lbl=lbl, bg=base_bg):
+                        lbl.configure(fg_color=bg)
+                    def _click(e, row=row, t=tag):
+                        self._on_row_click(row, t)
+
+                    lbl.bind("<Enter>",    _enter)
+                    lbl.bind("<Leave>",    _leave)
+                    lbl.bind("<Button-1>", _click)
+
                 row_cells.append(lbl)
             self._cell_widgets.append(row_cells)

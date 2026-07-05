@@ -24,20 +24,21 @@ from analyzer_gui.views.tokens_view import TokensView
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-_NAV_WIDTH = 160
+_NAV_WIDTH = 170
 _WIN_TITLE = "TraceHound"
-_WIN_SIZE = "1280x800"
+_WIN_SIZE  = "1380x860"
 
+# Each entry: (icon, label, shortcut, view_index)
 _NAV_ENTRIES = [
-    ("Load",         "Ctrl+0", 0),
-    ("Overview",     "Ctrl+1", 1),
-    ("Quality",      "Ctrl+2", 2),
-    ("Timing",       "Ctrl+3", 3),
-    ("Errors",       "Ctrl+4", 4),
-    ("Tokens & LLM", "Ctrl+5", 5),
-    ("Sessions",     "Ctrl+6", 6),
-    ("Desktop Rpt",  "Ctrl+7", 7),
-    ("Settings",     "Ctrl+8", 8),
+    ("▶",  "Load",         "Ctrl+0", 0),
+    ("≡",  "Overview",     "Ctrl+1", 1),
+    ("★",  "Quality",      "Ctrl+2", 2),
+    ("⏱",  "Timing",       "Ctrl+3", 3),
+    ("⚠",  "Errors",       "Ctrl+4", 4),
+    ("∑",  "Tokens & LLM", "Ctrl+5", 5),
+    ("☰",  "Sessions",     "Ctrl+6", 6),
+    ("▤",  "Desktop Rpt",  "Ctrl+7", 7),
+    ("⚙",  "Settings",     "Ctrl+8", 8),
 ]
 
 
@@ -52,49 +53,80 @@ class TraceHoundApp(ctk.CTk):
         super().__init__()
         self.title(_WIN_TITLE)
         self.geometry(_WIN_SIZE)
-        self.minsize(900, 600)
+        self.minsize(960, 620)
 
         self._backend = AnalysisBackend()
         self._current_log_dir: Optional[Path] = initial_log_dir
-        self._last_result = None
-        self._last_loader = None
+        self._last_result   = None
+        self._last_loader   = None
         self._last_reporter = None
 
         # ── Layout ─────────────────────────────────────────────────────
         self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=0)   # status bar
         self.columnconfigure(1, weight=1)
 
-        # Nav rail
-        self._nav = ctk.CTkFrame(self, width=_NAV_WIDTH, corner_radius=0)
-        self._nav.grid(row=0, column=0, sticky="nsew")
-        self._nav.rowconfigure(len(_NAV_ENTRIES) + 1, weight=1)  # spacer row
+        # ── Nav rail ───────────────────────────────────────────────────
+        self._nav = ctk.CTkFrame(self, width=_NAV_WIDTH, corner_radius=0,
+                                 fg_color=("gray18", "gray12"))
+        self._nav.grid(row=0, column=0, rowspan=2, sticky="nsew")
+        self._nav.rowconfigure(len(_NAV_ENTRIES) + 1, weight=1)
         self._nav.grid_propagate(False)
 
         ctk.CTkLabel(
-            self._nav, text=_WIN_TITLE, font=("", 16, "bold")
-        ).grid(row=0, column=0, pady=(20, 12), padx=8)
+            self._nav,
+            text=_WIN_TITLE,
+            font=("", 17, "bold"),
+            text_color=("#4a90d9", "#7ec8e3"),
+        ).grid(row=0, column=0, pady=(20, 14), padx=10)
+
+        # Separator under title
+        ctk.CTkFrame(self._nav, height=1, fg_color=("gray35", "gray28")).grid(
+            row=1, column=0, sticky="ew", padx=8, pady=(0, 6)
+        )
 
         self._nav_buttons: list[ctk.CTkButton] = []
-        for i, (label, shortcut, idx) in enumerate(_NAV_ENTRIES):
+        for i, (icon, label, shortcut, idx) in enumerate(_NAV_ENTRIES):
             btn = ctk.CTkButton(
                 self._nav,
-                text=f"{label}\n{shortcut}",
+                text=f"  {icon}  {label}\n       {shortcut}",
                 font=("", 11),
                 height=52,
-                corner_radius=6,
+                corner_radius=8,
                 fg_color="transparent",
-                hover_color=("gray75", "gray25"),
+                hover_color=("gray30", "gray22"),
                 anchor="w",
                 command=lambda n=idx: self._show_view(n),
             )
-            btn.grid(row=i + 1, column=0, sticky="ew", padx=8, pady=2)
+            btn.grid(row=i + 2, column=0, sticky="ew", padx=8, pady=2)
             self._nav_buttons.append(btn)
 
-        # Content area
+        # ── Content area ───────────────────────────────────────────────
         self._content = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
         self._content.grid(row=0, column=1, sticky="nsew")
         self._content.rowconfigure(0, weight=1)
         self._content.columnconfigure(0, weight=1)
+
+        # ── Status bar ─────────────────────────────────────────────────
+        self._status_bar = ctk.CTkFrame(
+            self, height=24, corner_radius=0,
+            fg_color=("gray22", "gray14"),
+        )
+        self._status_bar.grid(row=1, column=1, sticky="ew")
+        self._status_bar.grid_propagate(False)
+        self._status_bar.columnconfigure(0, weight=1)
+
+        self._status_lbl = ctk.CTkLabel(
+            self._status_bar, text="No data loaded",
+            font=("", 10), text_color="gray55", anchor="w",
+        )
+        self._status_lbl.grid(row=0, column=0, sticky="w", padx=12)
+
+        self._dir_lbl = ctk.CTkLabel(
+            self._status_bar, text="",
+            font=("Courier", 9), text_color="gray45", anchor="e",
+        )
+        self._dir_lbl.grid(row=0, column=1, sticky="e", padx=12)
 
         # ── Views ──────────────────────────────────────────────────────
         self._load_view    = LoadView(self._content)
@@ -119,31 +151,30 @@ class TraceHoundApp(ctk.CTk):
             self._settings,
         ]
 
-        # Place all views in the same cell; only one shown at a time
         for view in self._views:
             view.grid(row=0, column=0, sticky="nsew")
 
-        # Wire up callbacks
+        # ── Wire cross-navigation callbacks ────────────────────────────
+        self._errors.set_navigate_callback(self._navigate_to_session)
+        self._timing.set_navigate_callback(self._navigate_to_session)
+        self._tokens.set_navigate_callback(self._navigate_to_session)
+
+        # ── Wire other callbacks ────────────────────────────────────────
         self._load_view.set_run_callback(self._start_analysis)
         self._settings.set_rerun_callback(self._rerun_analysis)
 
-        # Initial state: only Load visible; analysis views disabled
         self._disable_analysis_nav()
         self._show_view(0)
 
-        # Pre-populate if CLI provided a directory
         if initial_log_dir:
             self._load_view.prepopulate(initial_log_dir)
         if initial_max_sessions != 30:
             self._settings.set_max_weeks(initial_max_sessions)
 
-        # Keyboard shortcuts
         for i in range(9):
             self.bind(f"<Control-Key-{i}>", lambda e, n=i: self._show_view(n))
 
-    # ------------------------------------------------------------------
-    # Navigation
-    # ------------------------------------------------------------------
+    # ── Navigation ───────────────────────────────────────────────────────────
 
     def _show_view(self, index: int) -> None:
         if index >= len(self._views):
@@ -152,15 +183,13 @@ class TraceHoundApp(ctk.CTk):
             view.grid_remove()
         self._views[index].grid()
 
-        # Highlight active nav button
         for i, btn in enumerate(self._nav_buttons):
             if i == index:
-                btn.configure(fg_color=("gray70", "gray30"))
+                btn.configure(fg_color=("gray36", "gray26"))
             else:
                 btn.configure(fg_color="transparent")
 
     def _disable_analysis_nav(self) -> None:
-        """Grey out all nav buttons except Load (index 0)."""
         for i, btn in enumerate(self._nav_buttons):
             if i != 0:
                 btn.configure(state="disabled")
@@ -169,18 +198,22 @@ class TraceHoundApp(ctk.CTk):
         for btn in self._nav_buttons:
             btn.configure(state="normal")
 
-    # ------------------------------------------------------------------
-    # Analysis orchestration
-    # ------------------------------------------------------------------
+    def _navigate_to_session(self, session_id: str, turn_id: str = "") -> None:
+        """Switch to Sessions view and open the requested session/turn."""
+        self._show_view(6)   # Sessions is index 6
+        self._sessions.navigate_to(session_id, turn_id)
+
+    # ── Analysis orchestration ────────────────────────────────────────────────
 
     def _start_analysis(self) -> None:
-        """Called by LoadView's Run button."""
         log_dir = self._load_view.get_log_dir()
         if not log_dir:
-            messagebox.showwarning("No directory", "Please enter or browse for a log directory.")
+            messagebox.showwarning("No directory",
+                                   "Please enter or browse for a log directory.")
             return
         if not log_dir.exists():
-            messagebox.showerror("Not found", f"Directory does not exist:\n{log_dir}")
+            messagebox.showerror("Not found",
+                                 f"Directory does not exist:\n{log_dir}")
             return
 
         max_weeks = self._load_view.get_max_sessions()
@@ -189,12 +222,12 @@ class TraceHoundApp(ctk.CTk):
         self._current_log_dir = log_dir
         self._run_backend(log_dir, max_weeks, qd_thresh, lift_thresh)
 
-    def _rerun_analysis(self, max_weeks: int, qd_thresh: float, lift_thresh: float) -> None:
-        """Called by SettingsView's Re-Run button."""
+    def _rerun_analysis(self, max_weeks: int,
+                        qd_thresh: float, lift_thresh: float) -> None:
         if self._current_log_dir is None:
             messagebox.showinfo("Re-Run", "No log directory loaded yet.")
             return
-        self._show_view(0)  # Switch to Load tab to show progress
+        self._show_view(0)
         self._run_backend(self._current_log_dir, max_weeks, qd_thresh, lift_thresh)
 
     def _run_backend(
@@ -210,6 +243,8 @@ class TraceHoundApp(ctk.CTk):
         self._load_view.set_busy(True)
         self._load_view.set_status("Starting…")
         self._disable_analysis_nav()
+        self._status_lbl.configure(text="Running analysis…")
+        self._dir_lbl.configure(text=str(log_dir))
 
         self._backend.run_async(
             log_dir=log_dir,
@@ -223,23 +258,44 @@ class TraceHoundApp(ctk.CTk):
         )
 
     def _on_complete(self, result, loader, reporter) -> None:
-        self._last_result = result
-        self._last_loader = loader
+        self._last_result   = result
+        self._last_loader   = loader
         self._last_reporter = reporter
 
         self._load_view.set_busy(False)
         self._load_view.set_status("Analysis complete.")
         self._enable_analysis_nav()
 
-        # Refresh analysis views (skip LoadView at index 0)
+        # Update status bar
+        dh = result.data_health if result else None
+        sf = result.session_flow if result else None
+        if dh and sf:
+            dr = dh.date_range
+            date_str = ""
+            if dr:
+                try:
+                    date_str = f"  ·  {dr[0].strftime('%Y-%m-%d')} → {dr[1].strftime('%Y-%m-%d')}"
+                except Exception:
+                    pass
+            self._status_lbl.configure(
+                text=(
+                    f"{dh.total_turns} turns"
+                    f"  ·  {sf.total_real_sessions} sessions"
+                    f"{date_str}"
+                    f"  ·  err rate {result.error_categories.overall_error_rate:.1%}"
+                )
+            )
+        else:
+            self._status_lbl.configure(text="Analysis complete.")
+
         for view in self._views[1:]:
             view.refresh(result, loader, reporter)
 
-        # Navigate to Overview automatically
         self._show_view(1)
 
     def _on_error(self, exc: Exception) -> None:
         self._load_view.set_busy(False)
         self._load_view.set_status(f"Error: {exc}")
         self._enable_analysis_nav()
+        self._status_lbl.configure(text=f"Error: {exc}")
         messagebox.showerror("Analysis Error", str(exc))

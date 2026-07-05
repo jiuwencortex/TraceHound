@@ -4,11 +4,20 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 import customtkinter as ctk
 
 from analyzer_gui.widgets.mpl_frame import MplFrame
 from analyzer_gui.widgets.sortable_table import SortableTable
-from analyzer_gui.widgets.stat_card import StatCard
+from analyzer_gui.widgets.stat_card import (
+    COLOR_BAD, COLOR_GOOD, COLOR_NEUTRAL, COLOR_WARN, StatCard,
+)
+
+
+def _short(text: str, n: int = 48) -> str:
+    text = (text or "").strip().replace("\n", " ")
+    return text[:n] + "…" if len(text) > n else text
 
 
 class TokensView(ctk.CTkFrame):
@@ -19,6 +28,8 @@ class TokensView(ctk.CTkFrame):
 
         self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
+        self._navigate_callback: Callable[[str, str], None] | None = None
+        self._turn_lookup: dict[str, Any] = {}
 
         ctk.CTkLabel(self, text="Tokens & LLM Performance", font=("", 20, "bold")).grid(
             row=0, column=0, padx=20, pady=(16, 8), sticky="w"
@@ -35,9 +46,13 @@ class TokensView(ctk.CTkFrame):
         self._build_tool_success()
         self._build_content_delivery()
 
-    # ------------------------------------------------------------------
-    # Tab builders
-    # ------------------------------------------------------------------
+    # ── Public ───────────────────────────────────────────────────────────────
+
+    def set_navigate_callback(self, cb: Callable[[str, str], None]) -> None:
+        self._navigate_callback = cb
+        self._llm_slow_table.bind_row_click(self._on_llm_row_click)
+
+    # ── Tab builders ─────────────────────────────────────────────────────────
 
     def _build_token_usage(self) -> None:
         tab = self._tabs.tab("Token Usage")
@@ -47,12 +62,13 @@ class TokensView(ctk.CTkFrame):
         cards = ctk.CTkFrame(tab, fg_color="transparent")
         cards.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
 
-        self._c_total_tok = StatCard(cards, "Total Tokens", height=70, width=140)
-        self._c_avg_tok = StatCard(cards, "Avg/Turn", height=70, width=130)
-        self._c_ctx = StatCard(cards, "Avg Context%", height=70, width=130)
-        self._c_near = StatCard(cards, "Near-Limit Turns", height=70, width=140)
-        self._c_cost = StatCard(cards, "Est. Cost", height=70, width=120)
-        for i, c in enumerate([self._c_total_tok, self._c_avg_tok, self._c_ctx, self._c_near, self._c_cost]):
+        self._c_total_tok = StatCard(cards, "Total Tokens",      height=80, width=140)
+        self._c_avg_tok   = StatCard(cards, "Avg/Turn",          height=80, width=130)
+        self._c_ctx       = StatCard(cards, "Avg Context%",      height=80, width=130)
+        self._c_near      = StatCard(cards, "Near-Limit Turns",  height=80, width=140)
+        self._c_cost      = StatCard(cards, "Est. Cost",         height=80, width=120)
+        for i, c in enumerate([self._c_total_tok, self._c_avg_tok,
+                                self._c_ctx, self._c_near, self._c_cost]):
             c.grid(row=0, column=i, padx=4)
 
         self._token_model_table = SortableTable(
@@ -73,23 +89,32 @@ class TokensView(ctk.CTkFrame):
         cards = ctk.CTkFrame(tab, fg_color="transparent")
         cards.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
 
-        self._c_lat_med = StatCard(cards, "Median Latency", height=70, width=140)
-        self._c_lat_p90 = StatCard(cards, "p90 Latency", height=70, width=130)
-        self._c_tps = StatCard(cards, "Throughput tok/s", height=70, width=150)
-        self._c_slow_prompt = StatCard(cards, "Slow Prompts (>5s)", height=70, width=150)
-        self._c_slow_gen = StatCard(cards, "Slow Gen (>100ms)", height=70, width=150)
-        for i, c in enumerate([self._c_lat_med, self._c_lat_p90, self._c_tps, self._c_slow_prompt, self._c_slow_gen]):
+        self._c_lat_med    = StatCard(cards, "Median Latency",     height=80, width=140)
+        self._c_lat_p90    = StatCard(cards, "p90 Latency",        height=80, width=130)
+        self._c_tps        = StatCard(cards, "Throughput tok/s",   height=80, width=150)
+        self._c_slow_prompt= StatCard(cards, "Slow Prompts (>5s)", height=80, width=150)
+        self._c_slow_gen   = StatCard(cards, "Slow Gen (>100ms)",  height=80, width=150)
+        for i, c in enumerate([self._c_lat_med, self._c_lat_p90, self._c_tps,
+                                self._c_slow_prompt, self._c_slow_gen]):
             c.grid(row=0, column=i, padx=4)
+
+        hint = ctk.CTkLabel(
+            tab,
+            text="Click a row to jump to that turn in Sessions →",
+            font=("", 10), text_color="gray55",
+        )
+        hint.grid(row=1, column=0, sticky="w", padx=10, pady=(2, 0))
 
         self._llm_slow_table = SortableTable(
             tab,
-            columns=["Turn ID", "Latency(ms)", "TTFT(ms)", "TPOT(ms)", "Model", "Status"],
-            col_widths=[140, 100, 90, 90, 160, 80],
+            columns=["Query", "Session", "Latency(ms)", "TTFT(ms)", "TPOT(ms)",
+                     "Model", "Status", "Request ID"],
+            col_widths=[190, 110, 100, 90, 80, 140, 70, 160],
         )
-        self._llm_slow_table.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 4))
+        self._llm_slow_table.grid(row=2, column=0, sticky="nsew", padx=8, pady=(2, 4))
 
         self._llm_chart = MplFrame(tab, figsize=(9, 3))
-        self._llm_chart.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self._llm_chart.grid(row=3, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
     def _build_tool_success(self) -> None:
         tab = self._tabs.tab("Tool Success")
@@ -99,12 +124,13 @@ class TokensView(ctk.CTkFrame):
         cards = ctk.CTkFrame(tab, fg_color="transparent")
         cards.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
 
-        self._c_total_calls = StatCard(cards, "Total Calls", height=70, width=130)
-        self._c_failures = StatCard(cards, "Failures", height=70, width=110)
-        self._c_succ_rate = StatCard(cards, "Success Rate", height=70, width=120)
-        self._c_recovery = StatCard(cards, "Recovery Rate", height=70, width=130)
-        self._c_top_err = StatCard(cards, "Top Error Msg", height=70, width=220)
-        for i, c in enumerate([self._c_total_calls, self._c_failures, self._c_succ_rate, self._c_recovery, self._c_top_err]):
+        self._c_total_calls = StatCard(cards, "Total Calls",       height=80, width=130)
+        self._c_failures    = StatCard(cards, "Failures",          height=80, width=110)
+        self._c_succ_rate   = StatCard(cards, "Success Rate",      height=80, width=120)
+        self._c_recovery    = StatCard(cards, "Recovery Rate",     height=80, width=130)
+        self._c_top_err     = StatCard(cards, "Top Error Msg",     height=80, width=220)
+        for i, c in enumerate([self._c_total_calls, self._c_failures,
+                                self._c_succ_rate, self._c_recovery, self._c_top_err]):
             c.grid(row=0, column=i, padx=4)
 
         self._tool_table = SortableTable(
@@ -122,11 +148,12 @@ class TokensView(ctk.CTkFrame):
         cards = ctk.CTkFrame(tab, fg_color="transparent")
         cards.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
 
-        self._c_productive = StatCard(cards, "Productive Rate", height=70, width=140)
-        self._c_files = StatCard(cards, "Files Delivered", height=70, width=130)
-        self._c_silent = StatCard(cards, "Silent Successes", height=70, width=140)
-        self._c_tool_content = StatCard(cards, "Tool→No-Content Rate", height=70, width=180)
-        for i, c in enumerate([self._c_productive, self._c_files, self._c_silent, self._c_tool_content]):
+        self._c_productive  = StatCard(cards, "Productive Rate",       height=80, width=140)
+        self._c_files       = StatCard(cards, "Files Delivered",       height=80, width=130)
+        self._c_silent      = StatCard(cards, "Silent Successes",      height=80, width=140)
+        self._c_tool_content= StatCard(cards, "Tool→No-Content Rate",  height=80, width=180)
+        for i, c in enumerate([self._c_productive, self._c_files,
+                                self._c_silent, self._c_tool_content]):
             c.grid(row=0, column=i, padx=4)
 
         self._content_table = SortableTable(
@@ -139,28 +166,40 @@ class TokensView(ctk.CTkFrame):
         self._content_chart = MplFrame(tab, figsize=(9, 3))
         self._content_chart.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
-    # ------------------------------------------------------------------
-    # Refresh
-    # ------------------------------------------------------------------
+    # ── Refresh ──────────────────────────────────────────────────────────────
 
-    def refresh(self, result, *_) -> None:
+    def refresh(self, result, loader=None, reporter=None, *_) -> None:
         if result is None:
             return
+
+        # Build turn lookup
+        self._turn_lookup = {}
+        if reporter is not None:
+            for t in getattr(reporter, "_turns", []):
+                self._turn_lookup[t.turn_id] = t
+
         self._fill_token_usage(result.token_usage)
         self._fill_llm_latency(result.llm_performance)
         self._fill_tool_success(result.tool_success)
         self._fill_content_delivery(result.content_delivery)
 
-    # ------------------------------------------------------------------
+    # ── Fill helpers ─────────────────────────────────────────────────────────
 
     def _fill_token_usage(self, tu) -> None:
         self._c_total_tok.update(f"{tu.total_tokens:,}")
         self._c_avg_tok.update(f"{tu.mean_tokens_per_turn:,.0f}")
-        self._c_ctx.update(f"{tu.mean_usage_percent:.1f}%",
-                           "#6b1a1a" if tu.mean_usage_percent > 80 else None)
-        self._c_near.update(str(tu.turns_near_limit),
-                            "#6b1a1a" if tu.turns_near_limit > 0 else None)
-        self._c_cost.update(f"${tu.estimated_total_cost:.4f}" if tu.estimated_total_cost > 0 else "—")
+        ctx_pct = tu.mean_usage_percent
+        self._c_ctx.update(
+            f"{ctx_pct:.1f}%",
+            StatCard.error_rate_color(ctx_pct / 100),
+        )
+        self._c_near.update(
+            str(tu.turns_near_limit),
+            COLOR_BAD if tu.turns_near_limit > 0 else COLOR_NEUTRAL,
+        )
+        self._c_cost.update(
+            f"${tu.estimated_total_cost:.4f}" if tu.estimated_total_cost > 0 else "—"
+        )
 
         rows = [
             [
@@ -175,13 +214,11 @@ class TokensView(ctk.CTkFrame):
         ]
         self._token_model_table.set_data(rows)
 
-        # Weekly chart
         weeks = tu.weekly_summary
         if not weeks:
             return
-
-        tags = [w.week_tag for w in weeks]
-        totals = [w.total_tokens for w in weeks]
+        tags    = [w.week_tag for w in weeks]
+        totals  = [w.total_tokens for w in weeks]
         indices = list(range(len(weeks)))
 
         def _draw(fig):
@@ -201,47 +238,65 @@ class TokensView(ctk.CTkFrame):
         self._c_slow_prompt.update(str(lp.slow_prompt_processing_count))
         self._c_slow_gen.update(str(lp.slow_generation_count))
 
-        rows = [
-            [
-                t.turn_id[:24] + "…" if len(t.turn_id) > 24 else t.turn_id,
+        rows       = []
+        highlights = []
+        tags       = []
+
+        for t in lp.slowest_turns:
+            rec     = self._turn_lookup.get(t.turn_id)
+            query   = _short(rec.user_query if rec else "", 48) or f"turn {t.turn_id[:20]}"
+            session = _short((rec.session_title or rec.session_id) if rec else "", 20)
+            sid     = rec.session_id if rec else ""
+
+            rows.append([
+                query,
+                session,
                 f"{t.total_latency_ms:.0f}",
                 f"{t.ttft_ms:.0f}",
                 f"{t.tpot_ms:.1f}",
                 t.model_name,
                 t.status,
-            ]
-            for t in lp.slowest_turns
-        ]
-        highlights = ["#6b1a1a" if r[5] == "error" else None for r in rows]
-        self._llm_slow_table.set_data(rows, highlights)
+                t.turn_id,
+            ])
+            highlights.append("#6b1a1a" if t.status == "error" else None)
+            tags.append((sid, t.turn_id))
 
-        # Weekly latency chart
+        self._llm_slow_table.set_data(rows, highlights, row_tags=tags)
+
         weeks = lp.weekly_summaries
         if not weeks:
             return
-        tags = [w.week_tag for w in weeks]
-        means = [w.mean_total_latency_ms for w in weeks]
+        tags_w  = [w.week_tag for w in weeks]
+        means   = [w.mean_total_latency_ms for w in weeks]
         indices = list(range(len(weeks)))
 
         def _draw(fig):
             ax = fig.add_subplot(111)
             ax.plot(indices, means, color="#e67e22", marker="o", linewidth=2)
             ax.set_xticks(indices)
-            ax.set_xticklabels(tags, rotation=30, ha="right", fontsize=8)
+            ax.set_xticklabels(tags_w, rotation=30, ha="right", fontsize=8)
             ax.set_ylabel("Mean Latency (ms)")
             ax.set_title("Weekly Mean LLM Latency")
 
         self._llm_chart.redraw(_draw)
 
+    def _on_llm_row_click(self, row_data: list, tag) -> None:
+        if self._navigate_callback and tag:
+            session_id, turn_id = tag
+            self._navigate_callback(session_id, turn_id)
+
     def _fill_tool_success(self, ts) -> None:
         self._c_total_calls.update(f"{ts.total_tool_calls:,}")
-        self._c_failures.update(str(ts.total_tool_failures),
-                                "#6b1a1a" if ts.total_tool_failures > 0 else "#1a472a")
-        self._c_succ_rate.update(f"{ts.overall_success_rate:.1%}",
-                                 "#1a472a" if ts.overall_success_rate >= 0.9 else
-                                 "#7a5c00" if ts.overall_success_rate >= 0.7 else "#6b1a1a")
+        self._c_failures.update(
+            str(ts.total_tool_failures),
+            "#6b1a1a" if ts.total_tool_failures > 0 else "#27ae60",
+        )
+        self._c_succ_rate.update(
+            f"{ts.overall_success_rate:.1%}",
+            "#27ae60" if ts.overall_success_rate >= 0.9
+            else "#e67e22" if ts.overall_success_rate >= 0.7 else "#6b1a1a",
+        )
         self._c_recovery.update(f"{ts.recovery_rate:.1%}")
-
         top_err = ts.top_error_messages[0][0][:30] if ts.top_error_messages else "—"
         self._c_top_err.update(top_err)
 
@@ -256,7 +311,8 @@ class TokensView(ctk.CTkFrame):
             ]
             for s in ts.per_tool_stats
         ]
-        highlights = ["#6b1a1a" if s.success_rate < 0.80 else None for s in ts.per_tool_stats]
+        highlights = ["#6b1a1a" if s.success_rate < 0.80 else None
+                      for s in ts.per_tool_stats]
         self._tool_table.set_data(rows, highlights)
 
     def _fill_content_delivery(self, cd) -> None:
@@ -271,11 +327,10 @@ class TokensView(ctk.CTkFrame):
         ]
         self._content_table.set_data(rows)
 
-        # Weekly chart
         weeks = cd.weekly_summaries
         if not weeks:
             return
-        tags = [w.week_tag for w in weeks]
+        tags    = [w.week_tag for w in weeks]
         lengths = [w.avg_response_length for w in weeks]
         indices = list(range(len(weeks)))
 

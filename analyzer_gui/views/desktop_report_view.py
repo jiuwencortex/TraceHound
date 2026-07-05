@@ -1,138 +1,339 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""DesktopReportView — renders the Desktop-style analysis report as HTML."""
+"""DesktopReportView — styled markdown report + structured table dashboard."""
 
 from __future__ import annotations
 
 import tkinter as tk
 from pathlib import Path
-from tkinter import font as tkfont
 
 import customtkinter as ctk
 
+from analyzer_gui.widgets.sortable_table import SortableTable
+
+
+# ── Markdown-to-table helpers ─────────────────────────────────────────────────
+
+def _parse_md_table(markdown: str, header_keyword: str) -> list[list[str]]:
+    """Return rows (excluding separator) from the first markdown table whose
+    header line contains *header_keyword* (case-insensitive)."""
+    lines = markdown.splitlines()
+    rows: list[list[str]] = []
+    in_table = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if in_table:
+                break
+            continue
+        if "|" not in stripped:
+            if in_table:
+                break
+            continue
+        cells = [c.strip() for c in stripped.split("|") if c.strip()]
+        if not cells:
+            continue
+        # Skip separator rows (only dashes/colons)
+        if all(c.replace("-", "").replace(":", "") == "" for c in cells):
+            continue
+        if not in_table:
+            if header_keyword.lower() in stripped.lower():
+                in_table = True
+                rows.append(cells)
+        else:
+            rows.append(cells)
+    return rows   # rows[0] = header, rows[1:] = data
+
+
+# ── DesktopReportView ─────────────────────────────────────────────────────────
 
 class DesktopReportView(ctk.CTkFrame):
-    """View that displays the Desktop-style markdown report rendered as HTML."""
+    """Two-mode view: styled markdown text report  OR  structured table dashboard."""
 
     def __init__(self, parent, **kwargs) -> None:
         super().__init__(parent, fg_color="transparent", **kwargs)
 
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
         self.columnconfigure(0, weight=1)
 
-        # Title
-        ctk.CTkLabel(self, text="Desktop Report", font=("", 20, "bold")).grid(
-            row=0, column=0, padx=20, pady=(16, 8), sticky="w"
+        # ── Title row ────────────────────────────────────────────────────
+        hdr = ctk.CTkFrame(self, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+        hdr.columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(hdr, text="Desktop Report", font=("", 20, "bold")).grid(
+            row=0, column=0, sticky="w"
         )
 
-        # Toolbar with buttons
-        toolbar = ctk.CTkFrame(self, fg_color="transparent")
-        toolbar.grid(row=0, column=0, padx=20, pady=(16, 8), sticky="e")
-
-        self._refresh_btn = ctk.CTkButton(
-            toolbar, text="🔄 Refresh", width=80, command=self._refresh_report
+        # Mode toggle (replaces Toggle Edit + Refresh)
+        self._mode_seg = ctk.CTkSegmentedButton(
+            hdr,
+            values=["Report", "Tables"],
+            command=self._on_mode_change,
+            width=200,
         )
-        self._refresh_btn.pack(side="right", padx=(8, 0))
+        self._mode_seg.set("Report")
+        self._mode_seg.grid(row=0, column=1, padx=(0, 8))
 
-        self._save_btn = ctk.CTkButton(
-            toolbar, text="💾 Save", width=80, command=self._save_report
-        )
-        self._save_btn.pack(side="right", padx=(8, 0))
+        # Save button (kept — it's actually useful)
+        ctk.CTkButton(
+            hdr, text="Save .md", width=80, command=self._save_report
+        ).grid(row=0, column=2)
 
-        self._edit_btn = ctk.CTkButton(
-            toolbar, text="✏️ Toggle Edit", width=100, command=self._toggle_edit
-        )
-        self._edit_btn.pack(side="right")
+        # ── Report mode: styled markdown textbox ─────────────────────────
+        self._report_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._report_frame.grid(row=2, column=0, sticky="nsew")
+        self._report_frame.rowconfigure(0, weight=1)
+        self._report_frame.columnconfigure(0, weight=1)
 
-        # HTML content area using tkinter Text widget with HTML rendering capability
         self._text_widget = tk.Text(
-            self,
+            self._report_frame,
             wrap="word",
             state="disabled",
-            bg="#2b2b2b",
+            bg="#1e1e1e",
             fg="#e0e0e0",
             insertbackground="white",
             selectbackground="#4a90d9",
             selectforeground="white",
-            padx=20,
-            pady=20,
+            padx=24,
+            pady=16,
             font=("Consolas", 11),
             relief="flat",
             borderwidth=0,
         )
-        self._text_widget.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self._text_widget.grid(row=0, column=0, sticky="nsew")
 
-        # Scrollbar
-        scrollbar = ctk.CTkScrollbar(self, command=self._text_widget.yview)
-        scrollbar.grid(row=1, column=1, sticky="ns", pady=(0, 8))
+        scrollbar = ctk.CTkScrollbar(self._report_frame,
+                                     command=self._text_widget.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
         self._text_widget.configure(yscrollcommand=scrollbar.set)
 
-        # Configure text tags for markdown rendering
         self._configure_tags()
 
+        # ── Tables mode: structured dashboard ────────────────────────────
+        self._tables_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self._tables_frame.columnconfigure(0, weight=1)
+        # (not gridded yet — shown on demand)
+
+        # Section: Recommendations
+        self._sec_label(self._tables_frame, "Recommended Fixes (Priority Order)", 0)
+        self._rec_table = SortableTable(
+            self._tables_frame,
+            columns=["Priority", "Fix", "Effort", "Impact"],
+            col_widths=[70, 380, 100, 200],
+        )
+        self._rec_table.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 12))
+
+        # Section: Session Overview
+        self._sec_label(self._tables_frame, "Session Overview", 2)
+        self._sess_table = SortableTable(
+            self._tables_frame,
+            columns=["Session ID", "Title / First Query", "Turns",
+                     "Error Rate", "Tokens", "Files"],
+            col_widths=[180, 260, 55, 90, 90, 55],
+        )
+        self._sess_table.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 12))
+
+        # Section: Time Breakdown
+        self._sec_label(self._tables_frame, "Time Breakdown", 4)
+        self._time_table = SortableTable(
+            self._tables_frame,
+            columns=["Phase", "Value", "Notes"],
+            col_widths=[200, 120, 400],
+        )
+        self._time_table.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 12))
+
+        # Section: Error Categories
+        self._sec_label(self._tables_frame, "Error Categories", 6)
+        self._err_table = SortableTable(
+            self._tables_frame,
+            columns=["Category", "Count", "% of Errors", "Affected Sessions"],
+            col_widths=[140, 70, 110, 140],
+        )
+        self._err_table.grid(row=7, column=0, sticky="ew", padx=8, pady=(0, 16))
+
+        # State
         self._current_markdown: str = ""
         self._result = None
-        self._loader = None
         self._reporter = None
-        self._is_edit_mode = False
 
-    def _configure_tags(self) -> None:
-        """Configure text styling tags."""
-        # Header styles
-        self._text_widget.tag_configure("h1", font=("Consolas", 18, "bold"), foreground="#ffffff", spacing3=12)
-        self._text_widget.tag_configure("h2", font=("Consolas", 14, "bold"), foreground="#c7020e", spacing3=8)
-        self._text_widget.tag_configure("h3", font=("Consolas", 12, "bold"), foreground="#e8a0a0", spacing3=6)
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
-        # Body text
-        self._text_widget.tag_configure("body", font=("Consolas", 11), foreground="#e0e0e0")
-        self._text_widget.tag_configure("bold", font=("Consolas", 11, "bold"), foreground="#ffffff")
-        self._text_widget.tag_configure("italic", font=("Consolas", 11, "italic"), foreground="#c0c0c0")
+    @staticmethod
+    def _sec_label(parent, text: str, row: int) -> None:
+        ctk.CTkLabel(
+            parent, text=text, font=("", 14, "bold"),
+            anchor="w",
+        ).grid(row=row, column=0, sticky="w", padx=12, pady=(12, 4))
 
-        # Code / inline code
-        self._text_widget.tag_configure("code", font=("Consolas", 10), foreground="#7ee787", background="#1e3a2f")
-        self._text_widget.tag_configure("code_block", font=("Consolas", 10), foreground="#7ee787", background="#1e3a2f", spacing1=6, spacing3=6)
-
-        # Lists
-        self._text_widget.tag_configure("bullet", font=("Consolas", 11), foreground="#e0e0e0", lmargin1=20, lmargin2=30)
-        self._text_widget.tag_configure("list_item", font=("Consolas", 11), foreground="#e0e0e0", lmargin1=30, lmargin2=40)
-
-        # Tables
-        self._text_widget.tag_configure("table_header", font=("Consolas", 10, "bold"), foreground="#ffffff", background="#3a3a3a")
-        self._text_widget.tag_configure("table_row", font=("Consolas", 10), foreground="#e0e0e0")
-        self._text_widget.tag_configure("table_cell", font=("Consolas", 10), foreground="#e0e0e0")
-
-        # Links
-        self._text_widget.tag_configure("link", font=("Consolas", 11, "underline"), foreground="#4a90d9")
-
-        # Blockquote / emphasis
-        self._text_widget.tag_configure("blockquote", font=("Consolas", 11, "italic"), foreground="#a0a0a0", lmargin1=20, lmargin2=30)
-
-        # Emoji / special
-        self._text_widget.tag_configure("emoji", font=("Segoe UI Emoji", 11))
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    # ── Public API ────────────────────────────────────────────────────────────
 
     def refresh(self, result, loader, reporter) -> None:
-        """Called when analysis completes — render the Desktop report."""
-        self._result = result
-        self._loader = loader
+        self._result   = result
         self._reporter = reporter
 
-        if reporter is not None:
+        md_text = "No report available. Run analysis first."
+        if reporter is not None and result is not None:
             try:
                 md_text = reporter.render_desktop(result)
-            except Exception:
-                md_text = "Error generating Desktop report."
-        else:
-            md_text = "No report available. Run analysis first."
+            except Exception as exc:
+                md_text = f"Error generating report:\n{exc}"
 
         self._current_markdown = md_text
         self._render_markdown(md_text)
 
+        if result is not None:
+            self._populate_tables(result, md_text)
+
+    # ── Mode switch ───────────────────────────────────────────────────────────
+
+    def _on_mode_change(self, mode: str) -> None:
+        if mode == "Report":
+            self._tables_frame.grid_remove()
+            self._report_frame.grid(row=2, column=0, sticky="nsew")
+        else:
+            self._report_frame.grid_remove()
+            self._tables_frame.grid(row=2, column=0, sticky="nsew")
+
+    # ── Table population ──────────────────────────────────────────────────────
+
+    def _populate_tables(self, result, markdown: str) -> None:
+        self._populate_rec_table(markdown)
+        self._populate_sess_table(result)
+        self._populate_time_table(result)
+        self._populate_err_table(result)
+
+    def _populate_rec_table(self, markdown: str) -> None:
+        """Parse the 'Priority | Fix | Effort | Impact' markdown table."""
+        rows = _parse_md_table(markdown, "Priority")
+        if len(rows) < 2:
+            self._rec_table.set_data([["No recommendations found", "", "", ""]])
+            return
+        data = rows[1:]   # skip header row
+        highlights = []
+        for row in data:
+            pri = row[0] if row else ""
+            highlights.append(
+                "#6b1a1a" if pri == "P0" else
+                "#3a3300" if pri in ("P1", "P2") else
+                None
+            )
+        self._rec_table.set_data(data, highlights)
+
+    def _populate_sess_table(self, result) -> None:
+        sf = getattr(result, "session_flow", None)
+        profiles = getattr(sf, "session_profiles", []) if sf else []
+        rows = []
+        highlights = []
+        for p in profiles:
+            sid      = getattr(p, "session_id",   "")
+            title    = getattr(p, "session_title", "") or sid
+            n_turns  = getattr(p, "n_turns",       0)
+            err_rate = getattr(p, "error_rate",    0.0)
+            tokens   = getattr(p, "total_tokens",  0)
+            files    = getattr(p, "files_delivered",0)
+            rows.append([
+                sid,
+                title[:50],
+                n_turns,
+                f"{err_rate:.1%}",
+                f"{tokens:,}" if tokens else "0",
+                files,
+            ])
+            highlights.append("#6b1a1a" if err_rate >= 0.5 else None)
+        if not rows:
+            self._sess_table.set_data([["No session data available", "", "", "", "", ""]])
+        else:
+            self._sess_table.set_data(rows, highlights)
+
+    def _populate_time_table(self, result) -> None:
+        tb = getattr(result, "time_bottlenecks", None)
+        if tb is None or getattr(tb, "n_turns_with_timing", 0) == 0:
+            self._time_table.set_data([["No timing data available", "—", ""]])
+            return
+
+        total_s  = getattr(tb, "total_time_s",      0.0)
+        mean_s   = getattr(tb, "mean_duration_s",   0.0)
+        median_s = getattr(tb, "median_duration_s", 0.0)
+        max_s    = getattr(tb, "max_duration_s",    0.0)
+        min_s    = getattr(tb, "min_duration_s",    0.0)
+        n        = getattr(tb, "n_turns_with_timing",0)
+
+        rows = [
+            ["Total net compute time", f"{total_s:.1f}s ({total_s/60:.1f} min)",
+             "Sum of all per-request durations. Idle time NOT included."],
+            ["Mean turn duration",     f"{mean_s:.1f}s",   "Average request→response time"],
+            ["Median turn duration",   f"{median_s:.1f}s", "Typical latency"],
+            ["Max turn duration",      f"{max_s:.1f}s",    "Slowest single request"],
+            ["Min turn duration",      f"{min_s:.1f}s",    "Fastest single request"],
+            ["Turns with timing data", str(n),             ""],
+        ]
+        highlights = [
+            None, None, None,
+            "#6b1a1a" if max_s > 60 else None,
+            None, None,
+        ]
+        self._time_table.set_data(rows, highlights)
+
+    def _populate_err_table(self, result) -> None:
+        ec = getattr(result, "error_categories", None)
+        if ec is None:
+            self._err_table.set_data([["No error data", "", "", ""]])
+            return
+        rows = []
+        highlights = []
+        for c in getattr(ec, "categories", []):
+            count = getattr(c, "count", 0)
+            if count == 0:
+                continue
+            rows.append([
+                getattr(c, "category",             ""),
+                count,
+                f"{getattr(c, 'percentage_of_errors', 0):.1f}%",
+                getattr(c, "affected_sessions",    0),
+            ])
+            highlights.append("#6b1a1a")
+        if not rows:
+            self._err_table.set_data([["No errors recorded", "0", "0%", "0"]])
+        else:
+            self._err_table.set_data(rows, highlights)
+
+    # ── Markdown rendering ────────────────────────────────────────────────────
+
+    def _configure_tags(self) -> None:
+        self._text_widget.tag_configure(
+            "h1", font=("Consolas", 18, "bold"), foreground="#ffffff", spacing3=12)
+        self._text_widget.tag_configure(
+            "h2", font=("Consolas", 14, "bold"), foreground="#7ec8e3", spacing3=8)
+        self._text_widget.tag_configure(
+            "h3", font=("Consolas", 12, "bold"), foreground="#a8d8a8", spacing3=6)
+        self._text_widget.tag_configure(
+            "body", font=("Consolas", 11), foreground="#e0e0e0")
+        self._text_widget.tag_configure(
+            "bold", font=("Consolas", 11, "bold"), foreground="#ffffff")
+        self._text_widget.tag_configure(
+            "italic", font=("Consolas", 11, "italic"), foreground="#c0c0c0")
+        self._text_widget.tag_configure(
+            "code", font=("Consolas", 10), foreground="#7ee787",
+            background="#1e3a2f")
+        self._text_widget.tag_configure(
+            "code_block", font=("Consolas", 10), foreground="#7ee787",
+            background="#1e3a2f", spacing1=6, spacing3=6)
+        self._text_widget.tag_configure(
+            "bullet", font=("Consolas", 11), foreground="#e0e0e0",
+            lmargin1=20, lmargin2=30)
+        self._text_widget.tag_configure(
+            "table_header", font=("Consolas", 10, "bold"),
+            foreground="#ffffff", background="#3a3a3a")
+        self._text_widget.tag_configure(
+            "table_row", font=("Consolas", 10), foreground="#d0d0d0")
+        self._text_widget.tag_configure(
+            "blockquote", font=("Consolas", 11, "italic"),
+            foreground="#a0a0a0", lmargin1=20, lmargin2=30)
+        self._text_widget.tag_configure(
+            "link", font=("Consolas", 11, "underline"), foreground="#4a90d9")
+
     def _render_markdown(self, text: str) -> None:
-        """Simple markdown parser that converts to styled tkinter text."""
         self._text_widget.configure(state="normal")
         self._text_widget.delete("1.0", "end")
 
@@ -142,44 +343,31 @@ class DesktopReportView(ctk.CTkFrame):
             line = lines[i]
             stripped = line.strip()
 
-            # Horizontal rule
-            if stripped == "---" or set(stripped) == {"-"}:
+            if stripped == "---" or (stripped and set(stripped) == {"-"}):
                 self._text_widget.insert("end", "\n" + "—" * 60 + "\n", "body")
                 i += 1
                 continue
 
-            # Headers
             if stripped.startswith("# "):
-                self._insert_formatted(stripped[2:], "h1")
-                i += 1
-                continue
+                self._insert_formatted(stripped[2:], "h1"); i += 1; continue
             if stripped.startswith("## "):
-                self._insert_formatted(stripped[3:], "h2")
-                i += 1
-                continue
+                self._insert_formatted(stripped[3:], "h2"); i += 1; continue
             if stripped.startswith("### "):
-                self._insert_formatted(stripped[4:], "h3")
-                i += 1
-                continue
+                self._insert_formatted(stripped[4:], "h3"); i += 1; continue
 
-            # Code block
             if stripped.startswith("```"):
-                lang = stripped[3:].strip()
                 code_lines = []
                 i += 1
                 while i < len(lines) and not lines[i].strip().startswith("```"):
                     code_lines.append(lines[i])
                     i += 1
-                code_text = "\n".join(code_lines)
                 self._text_widget.insert("end", "\n", "body")
-                self._text_widget.insert("end", code_text + "\n", "code_block")
+                self._text_widget.insert("end", "\n".join(code_lines) + "\n", "code_block")
                 if i < len(lines):
-                    i += 1  # skip closing ```
+                    i += 1
                 continue
 
-            # Table
             if "|" in stripped and stripped.startswith("|"):
-                # Render table
                 table_lines = []
                 while i < len(lines) and "|" in lines[i]:
                     table_lines.append(lines[i])
@@ -187,146 +375,73 @@ class DesktopReportView(ctk.CTkFrame):
                 self._render_table(table_lines)
                 continue
 
-            # Empty line
             if not stripped:
-                self._text_widget.insert("end", "\n", "body")
-                i += 1
-                continue
+                self._text_widget.insert("end", "\n", "body"); i += 1; continue
 
-            # List items
-            if stripped.startswith("- ") or stripped.startswith("* "):
-                content = stripped[2:]
-                self._insert_formatted("  • " + content, "bullet")
-                i += 1
-                continue
+            if stripped.startswith(("- ", "* ")):
+                self._insert_formatted("  • " + stripped[2:], "bullet"); i += 1; continue
             if stripped.startswith("> "):
-                self._insert_formatted(stripped[2:], "blockquote")
-                i += 1
-                continue
+                self._insert_formatted(stripped[2:], "blockquote"); i += 1; continue
 
-            # Regular paragraph with inline formatting
             self._insert_formatted(stripped, "body")
             i += 1
 
         self._text_widget.configure(state="disabled")
 
     def _insert_formatted(self, text: str, base_tag: str) -> None:
-        """Insert text with inline markdown formatting (bold, italic, code, links)."""
         self._text_widget.insert("end", "\n", base_tag)
-
-        # Parse inline formatting
         i = 0
         while i < len(text):
-            # Bold **text**
             if text[i:i+2] == "**":
                 end = text.find("**", i + 2)
                 if end != -1:
-                    self._text_widget.insert("end", text[i + 2:end], (base_tag, "bold"))
-                    i = end + 2
-                    continue
-
-            # Italic *text* (but not **)
-            if text[i] == "*" and (i + 1 >= len(text) or text[i + 1] != "*"):
+                    self._text_widget.insert("end", text[i+2:end], (base_tag, "bold"))
+                    i = end + 2; continue
+            if text[i] == "*" and (i + 1 >= len(text) or text[i+1] != "*"):
                 end = text.find("*", i + 1)
                 if end != -1:
-                    self._text_widget.insert("end", text[i + 1:end], (base_tag, "italic"))
-                    i = end + 1
-                    continue
-
-            # Inline code `text`
+                    self._text_widget.insert("end", text[i+1:end], (base_tag, "italic"))
+                    i = end + 1; continue
             if text[i] == "`":
                 end = text.find("`", i + 1)
                 if end != -1:
-                    self._text_widget.insert("end", text[i + 1:end], (base_tag, "code"))
-                    i = end + 1
-                    continue
-
-            # Link [text](url)
+                    self._text_widget.insert("end", text[i+1:end], (base_tag, "code"))
+                    i = end + 1; continue
             if text[i] == "[":
-                close_bracket = text.find("]", i)
-                if close_bracket != -1 and close_bracket + 1 < len(text) and text[close_bracket + 1] == "(":
-                    close_paren = text.find(")", close_bracket + 2)
-                    if close_paren != -1:
-                        link_text = text[i + 1:close_bracket]
-                        self._text_widget.insert("end", link_text, (base_tag, "link"))
-                        i = close_paren + 1
-                        continue
-
-            # Regular character
+                cb = text.find("]", i)
+                if cb != -1 and cb + 1 < len(text) and text[cb+1] == "(":
+                    cp = text.find(")", cb + 2)
+                    if cp != -1:
+                        self._text_widget.insert("end", text[i+1:cb], (base_tag, "link"))
+                        i = cp + 1; continue
             self._text_widget.insert("end", text[i], base_tag)
             i += 1
-
         self._text_widget.insert("end", "\n", base_tag)
 
     def _render_table(self, lines: list[str]) -> None:
-        """Render a markdown table using Tkinter Text widget."""
-        if not lines:
-            return
-
-        # Parse rows
         rows = []
         for line in lines:
-            cells = [c.strip() for c in line.split("|")]
-            cells = [c for c in cells if c]  # Remove empty from leading/trailing |
+            cells = [c.strip() for c in line.split("|") if c.strip()]
             if cells and not all(c.replace("-", "").replace(":", "") == "" for c in cells):
                 rows.append(cells)
-
         if not rows:
             return
-
         self._text_widget.insert("end", "\n", "body")
-
-        # Render header
-        if rows:
-            header = rows[0]
-            header_text = " | ".join(header)
-            self._text_widget.insert("end", header_text + "\n", "table_header")
-            self._text_widget.insert("end", "=" * len(header_text) + "\n", "table_header")
-
-        # Render data rows
+        header_text = " | ".join(rows[0])
+        self._text_widget.insert("end", header_text + "\n", "table_header")
+        self._text_widget.insert("end", "=" * len(header_text) + "\n", "table_header")
         for row in rows[1:]:
-            row_text = " | ".join(row)
-            self._text_widget.insert("end", row_text + "\n", "table_row")
-
+            self._text_widget.insert("end", " | ".join(row) + "\n", "table_row")
         self._text_widget.insert("end", "\n", "body")
 
-    # ------------------------------------------------------------------
-    # Actions
-    # ------------------------------------------------------------------
-
-    def _refresh_report(self) -> None:
-        """Re-generate the report from current data."""
-        if self._reporter is not None and self._result is not None:
-            try:
-                md_text = self._reporter.render_desktop(self._result)
-                self._current_markdown = md_text
-                self._render_markdown(md_text)
-            except Exception as exc:
-                self._text_widget.configure(state="normal")
-                self._text_widget.delete("1.0", "end")
-                self._text_widget.insert("end", f"Error refreshing report:\n{exc}", "body")
-                self._text_widget.configure(state="disabled")
+    # ── Save ──────────────────────────────────────────────────────────────────
 
     def _save_report(self) -> None:
-        """Save the current report to the Desktop."""
         desktop = Path.home() / "Desktop"
         desktop.mkdir(exist_ok=True)
-        out_path = desktop / "analysis.md"
+        out_path = desktop / "tracehound_report.md"
         out_path.write_text(self._current_markdown, encoding="utf-8")
-
-        # Show confirmation in status area
         self._text_widget.configure(state="normal")
-        self._text_widget.insert("end", f"\n\n[✅ Saved to {out_path}]\n", "bold")
+        self._text_widget.insert("end", f"\n\n[Saved → {out_path}]\n", "bold")
         self._text_widget.configure(state="disabled")
         self._text_widget.see("end")
-
-    def _toggle_edit(self) -> None:
-        """Toggle between read-only and editable mode."""
-        self._is_edit_mode = not self._is_edit_mode
-        if self._is_edit_mode:
-            self._text_widget.configure(state="normal")
-            self._edit_btn.configure(text="👁 View")
-        else:
-            self._current_markdown = self._text_widget.get("1.0", "end-1c")
-            self._text_widget.configure(state="disabled")
-            self._edit_btn.configure(text="✏️ Toggle Edit")

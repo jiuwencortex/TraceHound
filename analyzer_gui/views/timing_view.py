@@ -4,11 +4,18 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 import customtkinter as ctk
 
 from analyzer_gui.widgets.mpl_frame import MplFrame
 from analyzer_gui.widgets.sortable_table import SortableTable
 from analyzer_gui.widgets.stat_card import StatCard
+
+
+def _short(text: str, n: int = 50) -> str:
+    text = (text or "").strip().replace("\n", " ")
+    return text[:n] + "…" if len(text) > n else text
 
 
 class TimingView(ctk.CTkFrame):
@@ -19,6 +26,8 @@ class TimingView(ctk.CTkFrame):
 
         self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
+        self._navigate_callback: Callable[[str, str], None] | None = None
+        self._turn_lookup: dict[str, Any] = {}
 
         ctk.CTkLabel(self, text="Time Bottlenecks", font=("", 20, "bold")).grid(
             row=0, column=0, padx=20, pady=(16, 8), sticky="w"
@@ -34,25 +43,34 @@ class TimingView(ctk.CTkFrame):
         # Left column
         left = ctk.CTkFrame(body, fg_color="transparent")
         left.grid(row=0, column=0, sticky="nsew", padx=(4, 2), pady=0)
-        left.rowconfigure(1, weight=1)
+        left.rowconfigure(2, weight=1)
         left.columnconfigure(0, weight=1)
 
-        # Stat cards row
+        # Stat cards
         cards = ctk.CTkFrame(left, fg_color="transparent")
         cards.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        self._c_min = StatCard(cards, "Min", height=60, width=100)
-        self._c_med = StatCard(cards, "Median", height=60, width=100)
-        self._c_p90 = StatCard(cards, "p90", height=60, width=100)
-        self._c_max = StatCard(cards, "Max", height=60, width=100)
-        self._c_total = StatCard(cards, "Total", height=60, width=110)
-        for i, c in enumerate([self._c_min, self._c_med, self._c_p90, self._c_max, self._c_total]):
+        self._c_min   = StatCard(cards, "Min",    height=70, width=90)
+        self._c_med   = StatCard(cards, "Median", height=70, width=90)
+        self._c_p90   = StatCard(cards, "p90",    height=70, width=90)
+        self._c_max   = StatCard(cards, "Max",    height=70, width=90)
+        self._c_total = StatCard(cards, "Total",  height=70, width=100)
+        for i, c in enumerate([self._c_min, self._c_med, self._c_p90,
+                                self._c_max, self._c_total]):
             c.grid(row=0, column=i, padx=3)
 
+        # Clarification note
+        ctk.CTkLabel(
+            left,
+            text="Duration = per-request latency only (send→response).\n"
+                 "Idle time between turns is not counted.",
+            font=("", 9), text_color="gray50", justify="left", anchor="w",
+        ).grid(row=1, column=0, sticky="ew", padx=2, pady=(0, 4))
+
         self._histogram = MplFrame(left, figsize=(5, 3.5))
-        self._histogram.grid(row=1, column=0, sticky="nsew")
+        self._histogram.grid(row=2, column=0, sticky="nsew")
 
         self._verdict_lbl = ctk.CTkLabel(left, text="", font=("", 11))
-        self._verdict_lbl.grid(row=2, column=0, pady=(4, 0))
+        self._verdict_lbl.grid(row=3, column=0, pady=(4, 0))
 
         # Right column: tabs
         self._tabs = ctk.CTkTabview(body)
@@ -61,13 +79,22 @@ class TimingView(ctk.CTkFrame):
         for tab_name in ["Slowest Turns", "Tool Turn Corr.", "Per-Tool Timing", "Hourly Dist."]:
             self._tabs.add(tab_name)
 
-        # Slowest turns
-        self._slow_table = SortableTable(
-            self._tabs.tab("Slowest Turns"),
-            columns=["Turn ID", "Duration(s)", "Quality", "Status", "Messages", "Tools"],
-            col_widths=[140, 90, 80, 70, 80, 140],
+        # Slowest turns — query-first layout, clickable
+        slow_tab = self._tabs.tab("Slowest Turns")
+        slow_tab.rowconfigure(1, weight=1)
+        slow_tab.columnconfigure(0, weight=1)
+        hint = ctk.CTkLabel(
+            slow_tab,
+            text="Click a row to jump to that turn in Sessions →",
+            font=("", 10), text_color="gray55",
         )
-        self._slow_table.pack(fill="both", expand=True, padx=4, pady=4)
+        hint.grid(row=0, column=0, sticky="w", padx=6, pady=(4, 0))
+        self._slow_table = SortableTable(
+            slow_tab,
+            columns=["Query", "Session", "Status", "Duration(s)", "Tools", "Request ID"],
+            col_widths=[200, 120, 60, 90, 130, 160],
+        )
+        self._slow_table.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
 
         # Tool turn correlation
         self._tool_corr_table = SortableTable(
@@ -95,11 +122,24 @@ class TimingView(ctk.CTkFrame):
             self, text="No timing data available.", font=("", 14), text_color="gray60"
         )
 
-    # ------------------------------------------------------------------
+    # ── Public ───────────────────────────────────────────────────────────────
 
-    def refresh(self, result, *_) -> None:
+    def set_navigate_callback(self, cb: Callable[[str, str], None]) -> None:
+        self._navigate_callback = cb
+        self._slow_table.bind_row_click(self._on_slow_row_click)
+
+    # ── Refresh ──────────────────────────────────────────────────────────────
+
+    def refresh(self, result, loader=None, reporter=None, *_) -> None:
         if result is None:
             return
+
+        # Build turn lookup for cross-referencing
+        self._turn_lookup = {}
+        if reporter is not None:
+            for t in getattr(reporter, "_turns", []):
+                self._turn_lookup[t.turn_id] = t
+
         tb = result.time_bottlenecks
 
         if tb.n_turns_with_timing == 0:
@@ -107,33 +147,30 @@ class TimingView(ctk.CTkFrame):
             return
         self._no_data_lbl.place_forget()
 
-        # Stat cards
         self._c_min.update(f"{tb.min_duration_s:.1f}s")
         self._c_med.update(f"{tb.median_duration_s:.1f}s")
-        self._c_p90.update(f"{tb.p90_duration_s:.1f}s")
+        self._c_p90.update(f"{tb.p90_duration_s:.1f}s",
+                           StatCard.error_rate_color(min(tb.p90_duration_s / 30, 1.0)))
         self._c_max.update(f"{tb.max_duration_s:.1f}s")
         total_min = tb.total_time_s / 60
         self._c_total.update(f"{total_min:.1f}min")
 
-        # Verdict
         verdict_map = {
-            "slower_is_worse": ("Slower = worse quality", "#e74c3c"),
-            "slower_is_better": ("Slower = better quality", "#2ecc71"),
-            "no_correlation": ("No speed/quality correlation", "#95a5a6"),
+            "slower_is_worse":  ("Slower = worse quality",        "#e74c3c"),
+            "slower_is_better": ("Slower = better quality",       "#2ecc71"),
+            "no_correlation":   ("No speed/quality correlation",  "#95a5a6"),
         }
-        vtext, vcol = verdict_map.get(tb.speed_quality_verdict, (tb.speed_quality_verdict, "gray"))
+        vtext, vcol = verdict_map.get(tb.speed_quality_verdict,
+                                      (tb.speed_quality_verdict, "gray"))
         self._verdict_lbl.configure(text=vtext, text_color=vcol)
 
-        # Histogram
         self._draw_histogram(tb)
-
-        # Tables
         self._fill_slow_table(tb)
         self._fill_corr_table(tb)
         self._fill_timing_table(tb)
         self._draw_hourly_chart(tb)
 
-    # ------------------------------------------------------------------
+    # ── Internals ────────────────────────────────────────────────────────────
 
     def _draw_histogram(self, tb) -> None:
         med = tb.median_duration_s
@@ -142,13 +179,12 @@ class TimingView(ctk.CTkFrame):
         def _draw(fig):
             ax = fig.add_subplot(111)
             durations = [t.duration_seconds for t in tb.slowest_turns]
-            # If no per-turn data, skip
             if not durations:
                 ax.text(0.5, 0.5, "No per-turn data", transform=ax.transAxes, ha="center")
                 return
             ax.hist(durations, bins=min(20, len(durations)), color="#3498db", alpha=0.7)
             ax.axvline(med, linestyle="--", color="orange", label=f"median {med:.1f}s")
-            ax.axvline(p90, linestyle=":", color="red", label=f"p90 {p90:.1f}s")
+            ax.axvline(p90, linestyle=":", color="red",    label=f"p90 {p90:.1f}s")
             ax.set_xlabel("Duration (s)")
             ax.set_ylabel("Turns")
             ax.set_title("Turn Duration Distribution")
@@ -158,21 +194,36 @@ class TimingView(ctk.CTkFrame):
 
     def _fill_slow_table(self, tb) -> None:
         rows = []
+        highlights = []
+        tags = []
+
         for t in tb.slowest_turns:
-            status = "ERR" if t.has_error else ("OK" if t.task_completed else "INC")
-            tools = ", ".join(t.tools_called[:3])
+            rec = self._turn_lookup.get(t.turn_id)
+            query   = _short(rec.user_query  if rec else "", 50) or f"turn {t.turn_id[:20]}"
+            session = _short((rec.session_title or rec.session_id) if rec else "", 22)
+            sid     = rec.session_id if rec else ""
+            status  = "ERR" if t.has_error else ("OK" if t.task_completed else "INC")
+            tools   = ", ".join(t.tools_called[:3])
             if len(t.tools_called) > 3:
                 tools += "…"
+
             rows.append([
-                t.turn_id[:26] + "…" if len(t.turn_id) > 26 else t.turn_id,
-                f"{t.duration_seconds:.1f}",
-                f"{t.quality:.3f}",
+                query,
+                session,
                 status,
-                t.n_messages,
+                f"{t.duration_seconds:.1f}",
                 tools,
+                t.turn_id,
             ])
-        highlights = ["#6b1a1a" if r[3] == "ERR" else None for r in rows]
-        self._slow_table.set_data(rows, highlights)
+            highlights.append("#6b1a1a" if t.has_error else None)
+            tags.append((sid, t.turn_id))
+
+        self._slow_table.set_data(rows, highlights, row_tags=tags)
+
+    def _on_slow_row_click(self, row_data: list, tag) -> None:
+        if self._navigate_callback and tag:
+            session_id, turn_id = tag
+            self._navigate_callback(session_id, turn_id)
 
     def _fill_corr_table(self, tb) -> None:
         rows = []
@@ -208,15 +259,13 @@ class TimingView(ctk.CTkFrame):
         if not hours_data:
             return
 
-        hours = [h.hour for h in hours_data]
-        counts = [h.n_turns for h in hours_data]
+        hours     = [h.hour for h in hours_data]
+        counts    = [h.n_turns for h in hours_data]
         qualities = [h.mean_quality for h in hours_data]
 
         def _color(q):
-            if q >= 0.70:
-                return "#2ecc71"
-            if q >= 0.50:
-                return "#f39c12"
+            if q >= 0.70: return "#2ecc71"
+            if q >= 0.50: return "#f39c12"
             return "#e74c3c"
 
         colors = [_color(q) for q in qualities]

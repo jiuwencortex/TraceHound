@@ -1,20 +1,31 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""StatCard widget — a labelled metric card for the Overview panel."""
+"""StatCard widget — a labelled metric card with a coloured left accent bar."""
 
 from __future__ import annotations
 
 import customtkinter as ctk
 
-# Colour tokens (fg_color)
-COLOR_GOOD = "#1a472a"      # dark green
-COLOR_WARN = "#7a5c00"      # dark amber
-COLOR_BAD = "#6b1a1a"       # dark red
-COLOR_NEUTRAL = "default"   # let CTkFrame use theme default
+# Colour tokens used for the left accent bar
+COLOR_GOOD    = "#27ae60"   # green
+COLOR_WARN    = "#e67e22"   # orange
+COLOR_BAD     = "#e74c3c"   # red
+COLOR_NEUTRAL = "#4a90d9"   # steel blue (default)
+
+_ACCENT_W = 5   # width of left border bar in pixels
 
 
 class StatCard(ctk.CTkFrame):
-    """A small card that shows a metric title and its current value."""
+    """A compact metric card: coloured left bar | title (small) / value (large).
+
+    Visual structure
+    ----------------
+    ┌───┬──────────────────────┐
+    │   │  TITLE               │
+    │ ▌ │  VALUE               │  ← accent bar on left
+    │   │                      │
+    └───┴──────────────────────┘
+    """
 
     def __init__(
         self,
@@ -25,46 +36,52 @@ class StatCard(ctk.CTkFrame):
         width: int = 160,
         **kwargs,
     ) -> None:
-        super().__init__(parent, width=width, **kwargs)
+        super().__init__(parent, width=width, fg_color=("gray84", "gray20"), **kwargs)
+        self.columnconfigure(1, weight=1)
 
+        # Left accent bar
+        self._accent = ctk.CTkFrame(
+            self, width=_ACCENT_W, corner_radius=0,
+            fg_color=color_key if color_key != COLOR_NEUTRAL else COLOR_NEUTRAL,
+        )
+        self._accent.grid(row=0, column=0, sticky="ns", rowspan=2, padx=(0, 0))
+        self._accent.grid_propagate(False)
+
+        # Title label (small, muted)
         self._title_lbl = ctk.CTkLabel(
             self,
             text=title,
-            font=("", 11),
-            text_color="gray70",
-            wraplength=width - 20,
+            font=("", 10),
+            text_color=("gray50", "gray60"),
             anchor="w",
             justify="left",
+            wraplength=width - _ACCENT_W - 16,
         )
-        self._title_lbl.pack(padx=10, pady=(8, 0), anchor="w")
+        self._title_lbl.grid(row=0, column=1, sticky="ew", padx=(8, 8), pady=(8, 0))
 
+        # Value label (large, bold)
         self._value_lbl = ctk.CTkLabel(
             self,
             text=value,
-            font=("", 20, "bold"),
+            font=("", 18, "bold"),
             anchor="w",
+            justify="left",
         )
-        self._value_lbl.pack(padx=10, pady=(2, 8), anchor="w")
-
-        if color_key != COLOR_NEUTRAL:
-            self.configure(fg_color=color_key)
+        self._value_lbl.grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(2, 8))
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def update(self, value: str, color_key: str = COLOR_NEUTRAL) -> None:
-        """Update the displayed value and optionally the card's accent colour."""
+        """Update the displayed value and optionally the accent colour."""
         self._value_lbl.configure(text=value)
-        if not color_key or color_key == COLOR_NEUTRAL:
-            # Reset to theme default
-            self.configure(fg_color=("gray86", "gray17"))
-        else:
-            self.configure(fg_color=color_key)
+        self._accent.configure(
+            fg_color=color_key if color_key and color_key != COLOR_NEUTRAL else COLOR_NEUTRAL
+        )
 
     @staticmethod
     def quality_color(value: float) -> str:
-        """Map a 0–1 quality score to a card accent colour."""
         if value >= 0.70:
             return COLOR_GOOD
         if value >= 0.50:
@@ -73,7 +90,6 @@ class StatCard(ctk.CTkFrame):
 
     @staticmethod
     def error_rate_color(rate: float) -> str:
-        """Map an error rate fraction to a card accent colour."""
         if rate < 0.10:
             return COLOR_GOOD
         if rate < 0.30:
