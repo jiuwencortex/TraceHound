@@ -1051,9 +1051,9 @@ class _NumbersView(ctk.CTkScrollableFrame):
                 row=0, column=0, sticky="w", pady=(0, 2))
             _jtable(right,
                     ["Tool", "Calls", "Fails", "Rate"],
-                    [[t.tool_name[:20], t.total_calls, t.total_failures,
-                      f"{t.success_rate:.1%}"]
-                     for t in ts.per_tool_stats[:10]],
+                    [[t.name[:20], t.total_calls, t.failures,
+                       f"{t.success_rate:.1%}"]
+                      for t in ts.per_tool_stats[:10]],
                     start_row=1)
         else:
             ctk.CTkLabel(right, text="No tool calls recorded.",
